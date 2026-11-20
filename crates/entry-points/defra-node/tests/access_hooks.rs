@@ -170,6 +170,51 @@ fn merge_validator_accepts_rejects_and_defers_replicated_notes() -> Result<()> {
         .unwrap()
 }
 
+/// Counts the mutations it is asked about.
+#[derive(Default)]
+struct CountWrites(std::sync::atomic::AtomicUsize);
+
+#[async_trait]
+impl WriteValidator for CountWrites {
+    async fn validate_write(&self, _: &WriteRequest<'_>) -> Result<(), String> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// The answer the validator gives while a mutation is prepared serves the
+/// attempt that writes it: the attempt does not end to ask again.
+#[test]
+fn a_write_validator_is_asked_once_for_a_mutation() -> Result<()> {
+    edge::testing::edge()
+        .block_on(async {
+            let writes = Arc::new(CountWrites::default());
+            let node = NodeBuilder::default()
+                .with_p2p(iroh_config())
+                .with_access_hooks(
+                    AccessHooks::new(Vec::<String>::new()).with_write_validator(writes.clone()),
+                )
+                .build()
+                .await?;
+            node.add_collection(SDL).await?;
+
+            let (doc_id, _) = create(&node, "Note", r#"body: "kept""#).await?;
+            assert_eq!(writes.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+            let updated = node
+                .execute(&format!(
+                    r#"mutation {{ update_Note(docID: "{doc_id}", input: {{body: "changed"}}) {{ _docID }} }}"#
+                ))
+                .await;
+            assert!(!updated.has_errors(), "{:?}", updated.errors);
+            assert_eq!(writes.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+            node.shutdown().await.unwrap();
+            Ok(())
+        })
+        .unwrap()
+}
+
 #[test]
 fn read_and_write_validators_narrow_local_clients() -> Result<()> {
     edge::testing::edge()
