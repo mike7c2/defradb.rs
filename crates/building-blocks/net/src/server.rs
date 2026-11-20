@@ -9,7 +9,9 @@
 
 use std::future::Future;
 use std::io;
+use std::net::SocketAddr;
 use std::pin::{pin, Pin};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use edge::{Edge, TaskSet};
@@ -23,6 +25,37 @@ use tower_service::Service;
 use crate::rt::{Executor, Io, Timer};
 use crate::tls::TlsAcceptor;
 use crate::BoxError;
+
+/// The address a request's connection came from, put in every request's
+/// extensions, so that a route or a layer can tell a caller on this machine
+/// from one elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerAddr(pub SocketAddr);
+
+/// `inner`, with the connection's [`PeerAddr`] added to each request.
+#[derive(Clone)]
+struct WithPeer<S> {
+    inner: S,
+    peer: PeerAddr,
+}
+
+impl<S, B> Service<Request<B>> for WithPeer<S>
+where
+    S: Service<Request<B>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut request: Request<B>) -> Self::Future {
+        request.extensions_mut().insert(self.peer);
+        self.inner.call(request)
+    }
+}
 
 /// How long a client may take to finish its TLS handshake.
 const HANDSHAKE: Duration = Duration::from_secs(10);
@@ -58,8 +91,8 @@ where
             Some(_) = connections.join_next() => continue,
             () = closing.as_mut() => break,
         };
-        let stream = match accepted {
-            Ok((stream, _peer)) => stream,
+        let (stream, peer) = match accepted {
+            Ok(accepted) => accepted,
             Err(error) if is_connection_error(&error) => continue,
             Err(error) => {
                 tracing::warn!(%error, "accepting a connection failed; retrying shortly");
@@ -73,7 +106,10 @@ where
         connections.spawn(serve_connection(
             stream,
             tls.clone(),
-            service.clone(),
+            WithPeer {
+                inner: service.clone(),
+                peer: PeerAddr(peer),
+            },
             edge.clone(),
         ));
     }
