@@ -227,7 +227,14 @@ async fn print_key_families(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn write(writer: Arc<Node>, index: usize, docs: usize, blob: usize, per_second: f64) {
+async fn write(
+    writer: Arc<Node>,
+    index: usize,
+    docs: usize,
+    blob: usize,
+    per_second: f64,
+) -> Vec<String> {
+    let mut written = Vec::with_capacity(docs);
     let began = Instant::now();
     let mut state = 0x9E37_79B9_7F4A_7C15_u64 ^ index as u64;
     let mut slowest = Duration::ZERO;
@@ -258,12 +265,20 @@ async fn write(writer: Arc<Node>, index: usize, docs: usize, blob: usize, per_se
         if response.has_errors() {
             panic!("write failed: {:?}", response.errors);
         }
+        written.extend(
+            response
+                .data
+                .as_ref()
+                .and_then(|data| data["add_IqChunk"][0]["_docID"].as_str())
+                .map(str::to_string),
+        );
     }
     println!(
         "writer {index}: wrote {docs} in {:.1}s, slowest write {:.0} ms",
         began.elapsed().as_secs_f64(),
         slowest.as_secs_f64() * 1000.0
     );
+    written
 }
 
 async fn start_writers(dir: &Path, receiver: &str, count: usize) -> Result<Vec<Arc<Node>>> {
@@ -286,7 +301,12 @@ async fn start_writers(dir: &Path, receiver: &str, count: usize) -> Result<Vec<A
     Ok(writers)
 }
 
-async fn run_writers(writers: &[Arc<Node>], docs: usize, blob: usize, per_second: f64) {
+async fn run_writers(
+    writers: &[Arc<Node>],
+    docs: usize,
+    blob: usize,
+    per_second: f64,
+) -> Vec<String> {
     let edge = edge::testing::edge();
     let tasks: Vec<_> = writers
         .iter()
@@ -294,9 +314,11 @@ async fn run_writers(writers: &[Arc<Node>], docs: usize, blob: usize, per_second
         .enumerate()
         .map(|(index, writer)| edge.spawn(write(writer, index, docs, blob, per_second)))
         .collect();
+    let mut written = Vec::new();
     for task in tasks {
-        task.await.expect("writer task");
+        written.extend(task.await.expect("writer task"));
     }
+    written
 }
 
 /// Counts the documents the receiver merges from its change feed, so the
@@ -396,6 +418,27 @@ fn blob_replication_intake() -> Result<()> {
                         resident_mib()
                     );
                     sleep(limit).await;
+                }
+                "sync" => {
+                    let receiver = start(&tmp.path().join("b")).await?;
+                    let writer = start(&tmp.path().join("a0")).await?;
+                    let written = run_writers(&[writer.clone()], docs, blob, 0.0).await;
+                    let ops = receiver.p2p_system().expect("p2p").ops().clone();
+                    ops.connect_peer(&listen_addr(&writer).await?).await?;
+                    let began = Instant::now();
+                    let timeout = std::env::var("INTAKE_SYNC_TIMEOUT_SECS")
+                        .ok()
+                        .and_then(|secs| secs.parse().ok())
+                        .map(Duration::from_secs);
+                    let outcome = ops.sync_documents("IqChunk", written, timeout).await;
+                    let took = began.elapsed().as_secs_f64();
+                    let at_return = held(&receiver).await;
+                    sleep(Duration::from_secs(30)).await;
+                    println!(
+                        "sync_documents of {docs} returned {:?} after {took:.1}s holding {at_return}; 30s later {}",
+                        outcome.map_err(|error| error.to_string()),
+                        held(&receiver).await
+                    );
                 }
                 _ => {
                     let receiver = start(&tmp.path().join("b")).await?;
