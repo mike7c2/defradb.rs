@@ -171,6 +171,11 @@ pub enum IrohCommand {
         topic: String,
         reply: oneshot::Sender<crate::error::Result<bool>>,
     },
+    /// Subscribe an embedder to the application topic gossiped as `topic`.
+    SubscribeApp {
+        topic: String,
+        reply: Reply<super::gossip::AppSubscription>,
+    },
 
     // Messaging
     /// Open a stream for an embedder's protocol, dialling the peer if no

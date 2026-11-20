@@ -27,6 +27,7 @@ use crate::QueryId;
 
 use super::command::{CommandSender, EndpointStopped, IrohCommand};
 use super::endpoint_config::AdmissionAuthority;
+use super::gossip::{app_gossip_name, AppSubscription, MAX_APP_PAYLOAD};
 use super::peer_map::endpoint_id_to_peer_id;
 use super::protocol_stream::{ProtocolRecvStream, ProtocolSendStream};
 use super::records::{ServiceProfile, ServiceRecord};
@@ -315,6 +316,41 @@ impl IrohTransport {
             reply,
         })
         .await
+    }
+
+    /// Subscribe to the application topic `topic`: every message another
+    /// node publishes on it while this node has a neighbour on the topic is
+    /// handed to the subscription with its publisher. A node holds one
+    /// subscription per topic; dropping it leaves the topic.
+    ///
+    /// The topic is joined through the peers this node is connected to, and
+    /// through each peer that connects later. See [`AppSubscription`] for
+    /// what gossip does not promise.
+    pub async fn subscribe_app_topic(&self, topic: &str) -> Result<AppSubscription> {
+        let topic = app_gossip_name(topic)?;
+        self.send_command(|reply| IrohCommand::SubscribeApp { topic, reply })
+            .await
+    }
+
+    /// Publish `payload` on the application topic `topic`, sealed with this
+    /// node's key. A payload over [`MAX_APP_PAYLOAD`] is refused.
+    ///
+    /// `Ok` means the message was handed to gossip, not that anyone received
+    /// it. A node subscribed to the topic broadcasts at once, to nobody if it
+    /// has no neighbour on the topic. A node that is not subscribed joins the
+    /// topic for each publish and holds the message for a neighbour, briefly.
+    pub async fn publish_app_topic(&self, topic: &str, payload: &[u8]) -> Result<()> {
+        if payload.len() > MAX_APP_PAYLOAD {
+            return Err(Error::GossipTooLarge {
+                size: payload.len(),
+                limit: MAX_APP_PAYLOAD,
+            });
+        }
+        let topic = app_gossip_name(topic)?;
+        let data = super::gossip::raw_origin::seal(&self.secret_key, &topic, payload)?;
+        self.send_command(|reply| IrohCommand::PublishRaw { topic, data, reply })
+            .await
+            .map(|_| ())
     }
 }
 
