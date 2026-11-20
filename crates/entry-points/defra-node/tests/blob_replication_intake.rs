@@ -149,20 +149,82 @@ fn resident_mib() -> f64 {
     pages * 4096.0 / 1_048_576.0
 }
 
+/// The size of the files under `dir`, and when `INTAKE_DISK_DETAIL` is set a
+/// line of that size by file extension.
 fn disk_mib(dir: &Path) -> f64 {
-    fn bytes(dir: &Path) -> u64 {
-        std::fs::read_dir(dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| match entry.metadata() {
-                Ok(metadata) if metadata.is_dir() => bytes(&entry.path()),
-                Ok(metadata) => metadata.len(),
-                Err(_) => 0,
-            })
-            .sum()
+    fn sizes(dir: &Path, by_kind: &mut std::collections::BTreeMap<String, u64>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            match entry.metadata() {
+                Ok(metadata) if metadata.is_dir() => sizes(&entry.path(), by_kind),
+                Ok(metadata) => {
+                    let kind = entry
+                        .path()
+                        .extension()
+                        .map(|kind| kind.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned());
+                    *by_kind.entry(kind).or_default() += metadata.len();
+                }
+                Err(_) => {}
+            }
+        }
     }
-    bytes(dir) as f64 / 1_048_576.0
+    let mut by_kind = std::collections::BTreeMap::new();
+    sizes(dir, &mut by_kind);
+    if std::env::var("INTAKE_DISK_DETAIL").is_ok() {
+        let detail: Vec<String> = by_kind
+            .iter()
+            .map(|(kind, bytes)| format!("{kind} {:.1} MiB", *bytes as f64 / 1_048_576.0))
+            .collect();
+        println!("store files: {}", detail.join(", "));
+    }
+    by_kind.values().sum::<u64>() as f64 / 1_048_576.0
+}
+
+/// Prints the bytes of the values under each key family of the store in
+/// `dir`, which no node has open.
+async fn print_key_families(dir: &Path) -> Result<()> {
+    use storage::corekv::{IterOptions, Store};
+
+    fn store_dir(dir: &Path) -> Option<std::path::PathBuf> {
+        let entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
+        if entries.iter().any(|entry| entry.file_name() == "LOCK") {
+            return Some(dir.to_path_buf());
+        }
+        entries.iter().find_map(|entry| store_dir(&entry.path()))
+    }
+    let store = storage::RegolithStore::open(store_dir(dir).expect("a store"))?;
+    let txn = store.new_txn(true).await?;
+    let mut iter = txn.iterator(IterOptions::new()).await?;
+    let mut families = std::collections::BTreeMap::<String, (u64, u64)>::new();
+    while let Some(pair) = iter.next().await? {
+        let key = String::from_utf8_lossy(&pair.key);
+        let family: String = match key.strip_prefix('/') {
+            Some(path) => path.split('/').take(2).collect::<Vec<_>>().join("/"),
+            None => key.chars().take(1).collect(),
+        };
+        let family: String = family.chars().take(24).collect();
+        if families
+            .get(&family)
+            .is_none_or(|seen: &(u64, u64)| seen.0 < 8)
+        {
+            println!(
+                "key {:?} value {} B",
+                pair.key.escape_ascii().to_string(),
+                pair.value.len()
+            );
+        }
+        let entry = families.entry(family).or_default();
+        entry.0 += 1;
+        entry.1 += pair.value.len() as u64;
+    }
+    iter.close().await?;
+    for (family, (keys, bytes)) in families {
+        println!(
+            "keys {family:<26} {keys:>7} values {:>8.1} MiB",
+            bytes as f64 / 1_048_576.0
+        );
+    }
+    Ok(())
 }
 
 async fn write(writer: Arc<Node>, index: usize, docs: usize, blob: usize, per_second: f64) {
@@ -357,6 +419,14 @@ fn blob_replication_intake() -> Result<()> {
                         resident_mib(),
                         disk_mib(&tmp.path().join("b"))
                     );
+                    if std::env::var("INTAKE_KEY_DETAIL").is_ok() {
+                        drop(writers);
+                        match Arc::try_unwrap(receiver) {
+                            Ok(receiver) => receiver.shutdown().await?,
+                            Err(_) => panic!("the receiver is still shared"),
+                        }
+                        print_key_families(&tmp.path().join("b")).await?;
+                    }
                 }
             }
             Ok(())
