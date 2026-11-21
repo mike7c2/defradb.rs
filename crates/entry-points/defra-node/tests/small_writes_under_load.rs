@@ -130,9 +130,16 @@ fn store_options(stats: &Arc<regolith::Statistics>) -> storage::RegolithStoreOpt
     option!(target_file_size, "SWL_OPT_TARGET_FILE");
     option!(max_background_compactions, "SWL_OPT_BACKGROUND_COMPACTIONS");
     options.engine = engine;
+    options
+}
+
+/// The durability `SWL_DURABILITY` names: `immediate`, the default, syncs the
+/// write-ahead log before a commit is answered; `eventual` leaves it to the
+/// operating system.
+fn durability() -> storage::backends::DurabilityMode {
     match env("SWL_DURABILITY", "immediate".to_string()).as_str() {
-        "eventual" => options.with_durability(storage::backends::DurabilityMode::Eventual),
-        _ => options,
+        "eventual" => storage::backends::DurabilityMode::Eventual,
+        _ => storage::backends::DurabilityMode::Immediate,
     }
 }
 
@@ -279,6 +286,7 @@ async fn start(dir: &Path) -> Result<Started> {
             ..Default::default()
         })
         .with_regolith_options(store_options(&stats))
+        .with_storage_durability(durability())
         .data_path(dir.to_path_buf());
     let workers: usize = env("SWL_WORKERS", 2);
     if workers > 0 {
