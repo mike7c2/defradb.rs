@@ -148,11 +148,20 @@ fn durability() -> storage::backends::DurabilityMode {
 struct Times {
     samples: Mutex<Vec<f64>>,
     failures: AtomicUsize,
+    /// Every success and every failure since the start, never reset.
+    succeeded: AtomicUsize,
+    failed: AtomicUsize,
 }
 
 impl Times {
     fn add(&self, ms: f64) {
         self.samples.lock().unwrap().push(ms);
+        self.succeeded.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn fail(&self) {
+        self.failures.fetch_add(1, Ordering::Relaxed);
+        self.failed.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The interval's count, median, 99th percentile and worst, emptied.
@@ -288,6 +297,9 @@ async fn start(dir: &Path) -> Result<Started> {
         .with_regolith_options(store_options(&stats))
         .with_storage_durability(durability())
         .data_path(dir.to_path_buf());
+    if let Ok(secs) = std::env::var("SWL_QUERY_TIMEOUT_SECS") {
+        builder = builder.with_query_timeout(Duration::from_secs(secs.parse().expect("seconds")));
+    }
     let workers: usize = env("SWL_WORKERS", 2);
     if workers > 0 {
         builder = builder.with_workers(workers::Config {
@@ -412,7 +424,7 @@ async fn write_chunks(
             ))
             .await;
         if response.has_errors() {
-            times.failures.fetch_add(1, Ordering::Relaxed);
+            times.fail();
             eprintln!("chunk write failed: {:?}", response.errors);
             continue;
         }
@@ -442,7 +454,7 @@ async fn write_notes(started: Arc<Started>, name: String, every: Duration, times
             .await;
         let took = clock.elapsed().as_secs_f64() * 1000.0;
         if response.has_errors() {
-            times.failures.fetch_add(1, Ordering::Relaxed);
+            times.fail();
             println!(
                 "{}",
                 serde_json::json!({"note_write_failed": {"seq": seq, "ms": took, "error": format!("{:?}", response.errors)}})
@@ -656,6 +668,26 @@ fn small_writes_under_load() -> Result<()> {
                 }
             }
             drop(services);
+            // What the node holds at the end, by author: a write that failed
+            // may still have committed.
+            sleep(Duration::from_secs(env("SWL_FINAL_WAIT_SECS", 0))).await;
+            let response = node.execute("query { Note { author seq } }").await;
+            let mut by_author = std::collections::BTreeMap::<String, usize>::new();
+            for note in response
+                .data
+                .as_ref()
+                .and_then(|data| data["Note"].as_array())
+                .into_iter()
+                .flatten()
+            {
+                *by_author
+                    .entry(note["author"].as_str().unwrap_or("?").to_string())
+                    .or_default() += 1;
+            }
+            println!(
+                "{}",
+                serde_json::json!({"final": name, "notes_by_author": by_author, "notes_written": note_times.succeeded.load(Ordering::Relaxed), "note_writes_failed": note_times.failed.load(Ordering::Relaxed)})
+            );
             Ok(())
         })
         .unwrap()
