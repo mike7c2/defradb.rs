@@ -15,8 +15,9 @@
 //! processes that meet through the address file `INTAKE_ADDR_FILE`, so each
 //! side has a memory figure and a profile of its own.
 //!
-//! `INTAKE_PROFILE` (`embedded`, the default, or `server`) and the
-//! `INTAKE_OPT_*` variables choose the receiver's store options. Each run ends
+//! `INTAKE_PROFILE` (`embedded`, the default, or `server`), `INTAKE_MEMORY_MB`
+//! (a memory budget for the store's engine) and the `INTAKE_OPT_*` variables
+//! choose the receiver's store options. Each run ends
 //! with the engine's writes against the blob bytes taken in;
 //! `INTAKE_REPORT_SECS` prints the store's size and those writes every so many
 //! seconds, for a run long enough to see compaction settle.
@@ -71,6 +72,9 @@ fn store_options(stats: &Arc<regolith::Statistics>) -> storage::RegolithStoreOpt
         "server" => storage::RegolithStoreOptions::default(),
         _ => storage::RegolithStoreOptions::embedded(),
     };
+    if let Ok(mb) = std::env::var("INTAKE_MEMORY_MB") {
+        options = options.with_memory_budget(mb.parse::<usize>().expect("INTAKE_MEMORY_MB") << 20);
+    }
     let mut engine = options.engine.clone().statistics(Some(Arc::clone(stats)));
     macro_rules! option {
         ($name:ident, $variable:literal) => {
@@ -524,10 +528,15 @@ async fn watch(
         }
         if now.as_secs() > tick {
             tick = now.as_secs();
+            let engine = receiver.store_memory();
             println!(
-                "t={tick:>4}s held {got:>6} (+{:>4}) rss {:.0} MiB",
+                "t={tick:>4}s held {got:>6} (+{:>4}) rss {:.0} MiB; engine: cache {:.0} MiB, memtables {:.0} MiB, arena pool {:.0} MiB, pinned index and filters {:.1} MiB",
                 got - last,
-                resident_mib()
+                resident_mib(),
+                engine.block_cache_bytes as f64 / 1_048_576.0,
+                engine.memtable_reserved_bytes as f64 / 1_048_576.0,
+                engine.arena_pool_bytes as f64 / 1_048_576.0,
+                engine.pinned_metadata_bytes as f64 / 1_048_576.0,
             );
             last = got;
             if report.every > 0 && tick.is_multiple_of(report.every) {
