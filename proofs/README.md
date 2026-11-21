@@ -122,6 +122,7 @@ section is the **diff**: what is proven vs. the accepted gap.
 | Iroh dial outcome | TLA+ | p2p, p2p-adapter |
 | Server drain | TLA+ | net, pg-compat, edge, http (#2779) |
 | Document topic ingress | TLA+ | p2p, p2p-adapter (#2545) |
+| Document sync completion | TLA+ | p2p-adapter |
 | Add collection | TLA+ | db |
 | Index changes in a transaction | TLA+ | db, defra-node, http, cli |
 | Encrypted index changes outside a transaction | TLA+ | db, defra-node, cli |

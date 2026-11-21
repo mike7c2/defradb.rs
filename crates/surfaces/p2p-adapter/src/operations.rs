@@ -341,6 +341,9 @@ pub trait P2POperations: defra_core::thread_bounds::MaybeSendSync {
 
     /// Sync specific documents from connected peers.
     ///
+    /// `Ok` does not promise every document arrived: a sync that ends on a
+    /// timeout returns `Ok` with what merged by then. Read back what you need.
+    ///
     /// `timeout` is the caller's deadline for the whole operation. `None` means
     /// `DEFAULT_DOC_SYNC_TIMEOUT`, matching the 5s Go falls back to when its
     /// inherited context carries no deadline.
