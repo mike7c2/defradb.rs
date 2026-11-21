@@ -621,7 +621,7 @@ fn blob_replication_intake() -> Result<()> {
                 "sync" => {
                     let receiver = start(&tmp.path().join("b")).await?;
                     let writer = start(&tmp.path().join("a0")).await?;
-                    let written = run_writers(&[writer.clone()], docs, blob, 0.0).await;
+                    let written = run_writers(std::slice::from_ref(&writer), docs, blob, 0.0).await;
                     let ops = receiver.p2p_system().expect("p2p").ops().clone();
                     ops.connect_peer(&listen_addr(&writer).await?).await?;
                     let began = Instant::now();
