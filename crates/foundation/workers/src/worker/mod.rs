@@ -49,6 +49,8 @@ pub(crate) struct Tuning {
     pub io_budget: usize,
     pub idle_spin: Duration,
     pub stuck_after: Duration,
+    /// Report a task slower than this; zero reports none.
+    pub slow_task_after: Duration,
     /// Another thread watches this worker's heartbeat. Without one (a single
     /// worker), the worker measures each poll itself when it returns.
     pub monitored: bool,
