@@ -214,7 +214,7 @@ struct AsksTwoQueries {
 impl query::access_hooks::WriteValidator for AsksTwoQueries {
     async fn validate_write(
         &self,
-        request: &query::access_hooks::WriteRequest<'_>,
+        _request: &query::access_hooks::WriteRequest<'_>,
     ) -> std::result::Result<(), String> {
         let began = Instant::now();
         let Some(node) = self.node.get().and_then(std::sync::Weak::upgrade) else {
@@ -222,10 +222,7 @@ impl query::access_hooks::WriteValidator for AsksTwoQueries {
         };
         let last = self.last.lock().unwrap().clone();
         if let Some(doc_id) = last {
-            let query = match request.collection.name.as_str() {
-                "Chunk" => format!("query {{ Chunk(docID: \"{doc_id}\") {{ seq }} }}"),
-                _ => format!("query {{ Note(docID: \"{doc_id}\") {{ seq }} }}"),
-            };
+            let query = format!("query {{ Note(docID: \"{doc_id}\") {{ seq }} }}");
             let response = node.execute(&query).await;
             if response.has_errors() {
                 return Err(format!("{:?}", response.errors));
@@ -614,6 +611,7 @@ fn small_writes_under_load() -> Result<()> {
                 let stats = &started.stats;
                 let calls = started.rule.calls.load(Ordering::Relaxed).max(1);
                 let sync = stats.get_histogram_snapshot(regolith::Histogram::WalWriteTime);
+                let txns = node.transaction_stats();
                 println!(
                     "{}",
                     serde_json::json!({
@@ -630,6 +628,8 @@ fn small_writes_under_load() -> Result<()> {
                         "rule_ms": started.rule.nanos.load(Ordering::Relaxed) as f64 / 1e6 / calls as f64,
                         "stall_s": stats.get_ticker(Ticker::WriteStallMicros) as f64 / 1e6,
                         "wal_syncs": stats.get_ticker(Ticker::WalSyncCount),
+                        "commits": txns.as_ref().map_or(0, |txns| txns.commits),
+                        "conflicts": txns.as_ref().map_or(0, |txns| txns.conflicts),
                         "wal_sync_ms": {"n": sync.count, "avg": sync.average() as f64 / 1000.0, "max": sync.max as f64 / 1000.0},
                         "compactions": stats.get_ticker(Ticker::CompactionCount),
                         "compaction_written_mib": stats.get_ticker(Ticker::CompactionBytesWritten) as f64 / 1_048_576.0,
@@ -638,6 +638,14 @@ fn small_writes_under_load() -> Result<()> {
                         "cpu_edge_s": thread_cpu_seconds("defra-node-edge"),
                     })
                 );
+                if env("SWL_SYNC_STATUS", 0) == 1 {
+                    if let Ok(status) = ops.sync_status().await {
+                        println!(
+                            "{}",
+                            serde_json::json!({"sync_status": name, "t": tick, "status": status})
+                        );
+                    }
+                }
             }
             drop(services);
             Ok(())
