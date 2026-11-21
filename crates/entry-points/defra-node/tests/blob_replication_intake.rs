@@ -23,7 +23,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,8 +32,10 @@ mod clock;
 #[path = "support/outcome.rs"]
 mod outcome;
 
+use async_trait::async_trait;
 use clock::sleep;
-use defra_node::{Node, NodeBuilder, P2PConfig, PeerKeySource, SyncTuning};
+use db::merge::governance::{FieldValue, MergeCandidate, MergeValidator, MergeVerdict, MergeView};
+use defra_node::{AccessHooks, Node, NodeBuilder, P2PConfig, PeerKeySource, SyncTuning};
 use outcome::Result;
 
 const SDL: &str = "type IqChunk { seq: Int @immutable \n bytes: Blob @immutable }";
@@ -119,11 +121,78 @@ fn store_options(stats: &Arc<regolith::Statistics>) -> storage::RegolithStoreOpt
 }
 
 async fn start(dir: &Path) -> Result<Arc<Node>> {
-    Ok(start_counted(dir).await?.0)
+    Ok(start_counted(dir, None).await?.0)
+}
+
+/// Accepts every chunk once it has read the chunk's `seq` from the arriving
+/// composite, as an app's validator reads a small field beside the blob;
+/// `named` reads it with `composite_fields_named`, otherwise with
+/// `composite_fields`. Counts the time the reads take.
+#[derive(Default)]
+struct ReadsSeq {
+    named: bool,
+    nanos: AtomicU64,
+    reads: AtomicUsize,
+}
+
+#[async_trait]
+impl MergeValidator for ReadsSeq {
+    async fn validate(
+        &self,
+        candidate: &MergeCandidate<'_>,
+        view: &dyn MergeView,
+    ) -> std::result::Result<MergeVerdict, String> {
+        let began = Instant::now();
+        let fields = match self.named {
+            true => view.composite_fields_named(candidate.cid, &["seq"]).await?,
+            false => view.composite_fields(candidate.cid).await?,
+        };
+        self.nanos
+            .fetch_add(began.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        let has_seq = fields
+            .into_iter()
+            .flatten()
+            .any(|(name, value)| name == "seq" && matches!(value, FieldValue::Value(_)));
+        Ok(match has_seq {
+            true => MergeVerdict::Accept,
+            false => MergeVerdict::reject("a chunk without its seq"),
+        })
+    }
+}
+
+impl ReadsSeq {
+    /// The validator `INTAKE_VALIDATOR` names: `fields`, `named`, or none.
+    fn chosen() -> Option<Arc<Self>> {
+        match std::env::var("INTAKE_VALIDATOR").as_deref() {
+            Ok("fields") => Some(Arc::new(Self::default())),
+            Ok("named") => Some(Arc::new(Self {
+                named: true,
+                ..Self::default()
+            })),
+            _ => None,
+        }
+    }
+
+    fn print(&self) {
+        let reads = self.reads.load(Ordering::Relaxed);
+        println!(
+            "validator ({}): {reads} reads, {:.3} ms a read",
+            if self.named {
+                "composite_fields_named"
+            } else {
+                "composite_fields"
+            },
+            self.nanos.load(Ordering::Relaxed) as f64 / 1e6 / reads.max(1) as f64
+        );
+    }
 }
 
 /// A node, and the counters of its store's engine.
-async fn start_counted(dir: &Path) -> Result<(Arc<Node>, Arc<regolith::Statistics>)> {
+async fn start_counted(
+    dir: &Path,
+    validator: Option<Arc<ReadsSeq>>,
+) -> Result<(Arc<Node>, Arc<regolith::Statistics>)> {
     // Timers (write stalls among them) read the clock on every call, so
     // only `INTAKE_STATS_TIMERS` turns them on.
     let stats = Arc::new(regolith::Statistics::with_level(
@@ -132,7 +201,12 @@ async fn start_counted(dir: &Path) -> Result<(Arc<Node>, Arc<regolith::Statistic
             Err(_) => regolith::StatsLevel::ExceptHistogramOrTimers,
         },
     ));
-    let node = NodeBuilder::default()
+    let mut builder = NodeBuilder::default();
+    if let Some(validator) = validator {
+        builder = builder
+            .with_access_hooks(AccessHooks::new(["IqChunk"]).with_merge_validator(validator));
+    }
+    let node = builder
         .with_p2p(P2PConfig {
             port: Some(0),
             peer_key: PeerKeySource::Store,
@@ -511,7 +585,9 @@ fn blob_replication_intake() -> Result<()> {
             };
             match role.as_str() {
                 "receiver" => {
-                    let (receiver, stats) = start_counted(&tmp.path().join("b")).await?;
+                    let validator = ReadsSeq::chosen();
+                    let (receiver, stats) =
+                        start_counted(&tmp.path().join("b"), validator.clone()).await?;
                     let (arrived, _counting) = count_arrivals(&receiver);
                     std::fs::write(&addr_file, listen_addr(&receiver).await?)?;
                     while arrived.load(Ordering::Relaxed) == 0 {
@@ -528,6 +604,7 @@ fn blob_replication_intake() -> Result<()> {
                         disk_mib(&tmp.path().join("b"))
                     );
                     print_engine(&stats, (got * blob) as f64);
+                    validator.iter().for_each(|validator| validator.print());
                 }
                 "writers" => {
                     let receiver = std::fs::read_to_string(&addr_file)?;
@@ -563,7 +640,9 @@ fn blob_replication_intake() -> Result<()> {
                     );
                 }
                 _ => {
-                    let (receiver, stats) = start_counted(&tmp.path().join("b")).await?;
+                    let validator = ReadsSeq::chosen();
+                    let (receiver, stats) =
+                        start_counted(&tmp.path().join("b"), validator.clone()).await?;
                     let (arrived, _counting) = count_arrivals(&receiver);
                     let addr = listen_addr(&receiver).await?;
                     let writers = start_writers(tmp.path(), &addr, count).await?;
@@ -588,6 +667,7 @@ fn blob_replication_intake() -> Result<()> {
                         disk_mib(&tmp.path().join("a0"))
                     );
                     print_engine(&stats, (got * blob) as f64);
+                    validator.iter().for_each(|validator| validator.print());
                     if std::env::var("INTAKE_KEY_DETAIL").is_ok() {
                         drop(writers);
                         match Arc::try_unwrap(receiver) {
