@@ -450,22 +450,32 @@ impl<F: DocFetcher + 'static, R: TransactionRegistry + 'static> QueryRunner<F, R
                 update_input: &update_input,
                 update_ops: &update_ops,
             };
+            // The answer the validator gave while the request was prepared
+            // serves its attempts, as an ACP decision does: an attempt does
+            // not end to ask it again (proofs/tla/RetryPreparedInputs.tla).
+            let prepared_request = prepared_inputs
+                .map(|_| {
+                    crate::access_hooks::write::WriteValidationInput {
+                        validator: Arc::as_ptr(validator) as *const () as usize,
+                        identity: caller_identity.as_ref().map(ToString::to_string),
+                        collection: (*collection).clone(),
+                        kind: mutation.mutation_type.as_prefix().to_string(),
+                        doc_ids: validation_ids.clone(),
+                        create_input: mutation.create_input.clone(),
+                        update_input: update_input.clone(),
+                        update_ops: update_ops.clone(),
+                    }
+                    .prepared_request()
+                    .map_err(|error| QueryError::execution(error.to_string()))
+                })
+                .transpose()?;
             if strict_attempt {
-                let prepared_request = crate::access_hooks::write::WriteValidationInput {
-                    validator: Arc::as_ptr(validator) as *const () as usize,
-                    identity: caller_identity.as_ref().map(ToString::to_string),
-                    collection: (*collection).clone(),
-                    kind: mutation.mutation_type.as_prefix().to_string(),
-                    doc_ids: validation_ids.clone(),
-                    create_input: mutation.create_input.clone(),
-                    update_input: update_input.clone(),
-                    update_ops: update_ops.clone(),
-                }
-                .prepared_request()
-                .map_err(|error| QueryError::execution(error.to_string()))?;
-                let inputs = prepared_inputs.ok_or_else(|| {
-                    QueryError::execution("write validation attempt has no request memo")
-                })?;
+                let (Some(inputs), Some(prepared_request)) = (prepared_inputs, prepared_request)
+                else {
+                    return Err(QueryError::execution(
+                        "write validation attempt has no request memo",
+                    ));
+                };
                 if inputs.get(&prepared_request).is_none() {
                     return Err(QueryError::NeedsInput(prepared_request));
                 }
@@ -474,6 +484,13 @@ impl<F: DocFetcher + 'static, R: TransactionRegistry + 'static> QueryRunner<F, R
                     .validate_write(&request)
                     .await
                     .map_err(QueryError::execution)?;
+                if let (Some(inputs), Some(prepared_request)) = (prepared_inputs, prepared_request)
+                {
+                    inputs.insert(
+                        prepared_request,
+                        Arc::<[u8]>::from(crate::access_hooks::write::WRITE_ALLOWED),
+                    );
+                }
             }
         }
 

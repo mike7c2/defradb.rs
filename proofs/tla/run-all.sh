@@ -422,6 +422,7 @@ RUNS=(
   "MC_RetryPreparedInputs_Green.cfg RetryPreparedInputs.tla GREEN" # exact-context external answer survives commit retry
   "MC_RetryPreparedInputs_Red_Recompute.cfg RetryPreparedInputs.tla RED" # clearing prepared memo repeats provider work
   "MC_RetryPreparedInputs_Red_InAttempt.cfg RetryPreparedInputs.tla RED" # provider work runs under active transaction
+  "MC_RetryPreparedInputs_Red_DropPrepared.cfg RetryPreparedInputs.tla RED" # the code before: preparation asks the write validator and keeps no answer, so it is asked again (INV_ProviderOncePerContext)
   "MC_RetryMarkerGeneration_Green.cfg RetryMarkerGeneration.tla GREEN" # old ack and peer clear are fenced; a tick reads one page; a vanished document's marker is discharged
   "MC_RetryMarkerGeneration_Red_StaleAck.cfg RetryMarkerGeneration.tla RED" # stale ack erases newer registration
   "MC_RetryMarkerGeneration_Red_Readd.cfg RetryMarkerGeneration.tla RED" # stale peer clear erases re-added retry state

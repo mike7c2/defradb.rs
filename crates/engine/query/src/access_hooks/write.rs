@@ -27,11 +27,19 @@ pub struct WriteRequest<'a> {
 /// Called for GraphQL mutations before ACP checks and before any block is
 /// built. It is node-local and may read anything the node knows. `Err`
 /// refuses the mutation with that message.
+///
+/// An autocommit request asks it while the request is prepared, outside any
+/// transaction, and the request's attempts reuse that answer for the same
+/// question (the same documents, inputs, collection version and identity)
+/// rather than ask again. An answer should depend only on the request.
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait WriteValidator: MaybeSendSync {
     async fn validate_write(&self, request: &WriteRequest<'_>) -> Result<(), String>;
 }
+
+/// What a request's memo holds for a write its validator allowed.
+pub(crate) const WRITE_ALLOWED: &[u8] = b"ok";
 
 /// Exact, serializable validator request carried across transaction retries.
 /// The full collection version is included because validators may inspect
