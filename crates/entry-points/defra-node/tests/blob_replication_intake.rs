@@ -14,6 +14,12 @@
 //! `INTAKE_ROLE=receiver` and `INTAKE_ROLE=writers` split the run over two
 //! processes that meet through the address file `INTAKE_ADDR_FILE`, so each
 //! side has a memory figure and a profile of its own.
+//!
+//! `INTAKE_PROFILE` (`embedded`, the default, or `server`) and the
+//! `INTAKE_OPT_*` variables choose the receiver's store options. Each run ends
+//! with the engine's writes against the blob bytes taken in;
+//! `INTAKE_REPORT_SECS` prints the store's size and those writes every so many
+//! seconds, for a run long enough to see compaction settle.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
@@ -57,13 +63,13 @@ fn tuning() -> SyncTuning {
 /// The store options: the profile `INTAKE_PROFILE` names (`server` or
 /// `embedded`), with each engine option an `INTAKE_OPT_*` variable names set
 /// over it.
-fn store_options() -> storage::RegolithStoreOptions {
+fn store_options(stats: &Arc<regolith::Statistics>) -> storage::RegolithStoreOptions {
     let profile: String = env("INTAKE_PROFILE", "embedded".to_string());
     let mut options = match profile.as_str() {
         "server" => storage::RegolithStoreOptions::default(),
         _ => storage::RegolithStoreOptions::embedded(),
     };
-    let mut engine = options.engine.clone();
+    let mut engine = options.engine.clone().statistics(Some(Arc::clone(stats)));
     macro_rules! option {
         ($name:ident, $variable:literal) => {
             if let Ok(value) = std::env::var($variable) {
@@ -94,11 +100,38 @@ fn store_options() -> storage::RegolithStoreOptions {
     );
     option!(inline_compaction, "INTAKE_OPT_INLINE_COMPACTION");
     option!(max_value_size, "INTAKE_OPT_MAX_VALUE");
+    option!(level_size_multiplier, "INTAKE_OPT_LEVEL_MULTIPLIER");
+    if let Ok(style) = std::env::var("INTAKE_OPT_COMPACTION") {
+        engine = engine.compaction_style(match style.as_str() {
+            "universal" => regolith::CompactionStyle::Universal,
+            _ => regolith::CompactionStyle::Level,
+        });
+    }
+    if let Ok(codec) = std::env::var("INTAKE_OPT_COMPRESSION") {
+        engine = engine.compression(match codec.as_str() {
+            "none" => regolith::CompressionType::None,
+            "snappy" => regolith::CompressionType::Snappy,
+            _ => regolith::CompressionType::Lz4,
+        });
+    }
     options.engine = engine;
     options
 }
 
 async fn start(dir: &Path) -> Result<Arc<Node>> {
+    Ok(start_counted(dir).await?.0)
+}
+
+/// A node, and the counters of its store's engine.
+async fn start_counted(dir: &Path) -> Result<(Arc<Node>, Arc<regolith::Statistics>)> {
+    // Timers (write stalls among them) read the clock on every call, so
+    // only `INTAKE_STATS_TIMERS` turns them on.
+    let stats = Arc::new(regolith::Statistics::with_level(
+        match std::env::var("INTAKE_STATS_TIMERS") {
+            Ok(_) => regolith::StatsLevel::All,
+            Err(_) => regolith::StatsLevel::ExceptHistogramOrTimers,
+        },
+    ));
     let node = NodeBuilder::default()
         .with_p2p(P2PConfig {
             port: Some(0),
@@ -109,12 +142,37 @@ async fn start(dir: &Path) -> Result<Arc<Node>> {
             sync: tuning(),
             ..Default::default()
         })
-        .with_regolith_options(store_options())
+        .with_regolith_options(store_options(&stats))
         .data_path(dir.to_path_buf())
         .build()
         .await?;
     node.add_collection(SDL).await?;
-    Ok(Arc::new(node))
+    Ok((Arc::new(node), stats))
+}
+
+/// What the store's engine wrote and read, against `payload` bytes of blobs
+/// taken in: the write amplification of the WAL, flushes and compaction.
+fn print_engine(stats: &regolith::Statistics, payload: f64) {
+    use regolith::Ticker;
+    let mib = |ticker| stats.get_ticker(ticker) as f64 / 1_048_576.0;
+    let payload = payload / 1_048_576.0;
+    let written = mib(Ticker::WalBytesWritten)
+        + mib(Ticker::FlushBytesWritten)
+        + mib(Ticker::CompactionBytesWritten);
+    println!(
+        "engine: payload {payload:.1} MiB; user writes {:.1} MiB; wal {:.1} MiB; flush {:.1} MiB in {}; compaction read {:.1} MiB written {:.1} MiB in {}; device writes {:.1}x payload; reads {:.1} MiB, block cache misses {}; write stalls {:.1}s",
+        mib(Ticker::BytesWritten),
+        mib(Ticker::WalBytesWritten),
+        mib(Ticker::FlushBytesWritten),
+        stats.get_ticker(Ticker::FlushCount),
+        mib(Ticker::CompactionBytesRead),
+        mib(Ticker::CompactionBytesWritten),
+        stats.get_ticker(Ticker::CompactionCount),
+        written / payload.max(f64::MIN_POSITIVE),
+        mib(Ticker::BytesRead),
+        stats.get_ticker(Ticker::BlockCacheMiss),
+        stats.get_ticker(Ticker::WriteStallMicros) as f64 / 1e6,
+    );
 }
 
 async fn listen_addr(node: &Node) -> Result<String> {
@@ -152,6 +210,19 @@ fn resident_mib() -> f64 {
 /// The size of the files under `dir`, and when `INTAKE_DISK_DETAIL` is set a
 /// line of that size by file extension.
 fn disk_mib(dir: &Path) -> f64 {
+    let by_kind = disk_by_kind(dir);
+    if std::env::var("INTAKE_DISK_DETAIL").is_ok() {
+        let detail: Vec<String> = by_kind
+            .iter()
+            .map(|(kind, bytes)| format!("{kind} {:.1} MiB", *bytes as f64 / 1_048_576.0))
+            .collect();
+        println!("store files: {}", detail.join(", "));
+    }
+    by_kind.values().sum::<u64>() as f64 / 1_048_576.0
+}
+
+/// The bytes of the files under `dir`, by file extension.
+fn disk_by_kind(dir: &Path) -> std::collections::BTreeMap<String, u64> {
     fn sizes(dir: &Path, by_kind: &mut std::collections::BTreeMap<String, u64>) {
         for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
             match entry.metadata() {
@@ -170,14 +241,7 @@ fn disk_mib(dir: &Path) -> f64 {
     }
     let mut by_kind = std::collections::BTreeMap::new();
     sizes(dir, &mut by_kind);
-    if std::env::var("INTAKE_DISK_DETAIL").is_ok() {
-        let detail: Vec<String> = by_kind
-            .iter()
-            .map(|(kind, bytes)| format!("{kind} {:.1} MiB", *bytes as f64 / 1_048_576.0))
-            .collect();
-        println!("store files: {}", detail.join(", "));
-    }
-    by_kind.values().sum::<u64>() as f64 / 1_048_576.0
+    by_kind
 }
 
 /// Prints the bytes of the values under each key family of the store in
@@ -206,6 +270,7 @@ async fn print_key_families(dir: &Path) -> Result<()> {
         if families
             .get(&family)
             .is_none_or(|seen: &(u64, u64)| seen.0 < 8)
+            || std::env::var("INTAKE_KEY_ALL").is_ok()
         {
             println!(
                 "key {:?} value {} B",
@@ -312,7 +377,10 @@ async fn run_writers(
         .iter()
         .cloned()
         .enumerate()
-        .map(|(index, writer)| edge.spawn(write(writer, index, docs, blob, per_second)))
+        .map(|(index, writer)| {
+            edge.spawn(write(writer, index, docs, blob, per_second))
+                .within(Duration::MAX)
+        })
         .collect();
     let mut written = Vec::new();
     for task in tasks {
@@ -344,6 +412,7 @@ async fn watch(
     want: usize,
     began: Instant,
     limit: Duration,
+    report: &Report,
 ) -> (usize, f64) {
     let mut last = 0;
     let mut tick = 0u64;
@@ -361,8 +430,58 @@ async fn watch(
                 resident_mib()
             );
             last = got;
+            if report.every > 0 && tick.is_multiple_of(report.every) {
+                report.print(tick, got);
+            }
         }
         sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Every `INTAKE_REPORT_SECS` seconds, the receiver's store against the blob
+/// bytes it has taken in: its size on disk (space amplification) and what
+/// its engine has written (write amplification).
+struct Report {
+    dir: std::path::PathBuf,
+    stats: Arc<regolith::Statistics>,
+    blob: usize,
+    every: u64,
+}
+
+impl Report {
+    fn new(dir: std::path::PathBuf, stats: Arc<regolith::Statistics>, blob: usize) -> Self {
+        Self {
+            dir,
+            stats,
+            blob,
+            every: env("INTAKE_REPORT_SECS", 0),
+        }
+    }
+
+    fn print(&self, tick: u64, got: usize) {
+        use regolith::Ticker;
+        let mib = |bytes: u64| bytes as f64 / 1_048_576.0;
+        let ticker = |ticker| mib(self.stats.get_ticker(ticker));
+        let payload = mib((got * self.blob) as u64).max(f64::MIN_POSITIVE);
+        let files = disk_by_kind(&self.dir);
+        let kind = |name: &str| mib(files.get(name).copied().unwrap_or(0));
+        let store = mib(files.values().sum());
+        let written = ticker(Ticker::WalBytesWritten)
+            + ticker(Ticker::FlushBytesWritten)
+            + ticker(Ticker::CompactionBytesWritten);
+        println!(
+            "report t={tick} docs={got} payload_mib={payload:.1} store_mib={store:.1} sst_mib={:.1} log_mib={:.1} space_x={:.2} wal_mib={:.1} flush_mib={:.1} compaction_read_mib={:.1} compaction_written_mib={:.1} compactions={} written_x={:.1} rss_mib={:.0}",
+            kind("sst"),
+            kind("log"),
+            store / payload,
+            ticker(Ticker::WalBytesWritten),
+            ticker(Ticker::FlushBytesWritten),
+            ticker(Ticker::CompactionBytesRead),
+            ticker(Ticker::CompactionBytesWritten),
+            self.stats.get_ticker(Ticker::CompactionCount),
+            written / payload,
+            resident_mib(),
+        );
     }
 }
 
@@ -392,20 +511,23 @@ fn blob_replication_intake() -> Result<()> {
             };
             match role.as_str() {
                 "receiver" => {
-                    let receiver = start(&tmp.path().join("b")).await?;
+                    let (receiver, stats) = start_counted(&tmp.path().join("b")).await?;
                     let (arrived, _counting) = count_arrivals(&receiver);
                     std::fs::write(&addr_file, listen_addr(&receiver).await?)?;
                     while arrived.load(Ordering::Relaxed) == 0 {
                         sleep(Duration::from_millis(5)).await;
                     }
                     let began = Instant::now();
-                    let (got, all) = watch(&receiver, &arrived, want, began, limit).await;
+                    let report = Report::new(tmp.path().join("b"), Arc::clone(&stats), blob);
+                    let (got, all) =
+                        watch(&receiver, &arrived, want, began, limit, &report).await;
                     println!(
                         "receiver held {got} of {want} after {all:.1}s from its first = {:.1} docs/s, rss {:.0} MiB, store {:.0} MiB",
                         got as f64 / all,
                         resident_mib(),
                         disk_mib(&tmp.path().join("b"))
                     );
+                    print_engine(&stats, (got * blob) as f64);
                 }
                 "writers" => {
                     let receiver = std::fs::read_to_string(&addr_file)?;
@@ -441,27 +563,31 @@ fn blob_replication_intake() -> Result<()> {
                     );
                 }
                 _ => {
-                    let receiver = start(&tmp.path().join("b")).await?;
+                    let (receiver, stats) = start_counted(&tmp.path().join("b")).await?;
                     let (arrived, _counting) = count_arrivals(&receiver);
                     let addr = listen_addr(&receiver).await?;
                     let writers = start_writers(tmp.path(), &addr, count).await?;
                     let began = Instant::now();
                     let watching = {
                         let receiver = receiver.clone();
+                        let report = Report::new(tmp.path().join("b"), Arc::clone(&stats), blob);
                         edge::testing::edge()
                             .spawn(async move {
-                                watch(&receiver, &arrived, want, began, limit).await
+                                watch(&receiver, &arrived, want, began, limit, &report).await
                             })
+                            .within(Duration::MAX)
                     };
                     run_writers(&writers, docs, blob, per_second).await;
                     let wrote = began.elapsed().as_secs_f64();
                     let (got, all) = watching.await.expect("watch task");
                     println!(
-                        "{count} writer(s), {docs} docs each of {blob} B: wrote {want} in {wrote:.1}s; receiver held {got} after {all:.1}s = {:.1} docs/s, rss {:.0} MiB, receiver store {:.0} MiB",
+                        "{count} writer(s), {docs} docs each of {blob} B: wrote {want} in {wrote:.1}s; receiver held {got} after {all:.1}s = {:.1} docs/s, rss {:.0} MiB, receiver store {:.0} MiB, first writer's store {:.0} MiB",
                         got as f64 / all,
                         resident_mib(),
-                        disk_mib(&tmp.path().join("b"))
+                        disk_mib(&tmp.path().join("b")),
+                        disk_mib(&tmp.path().join("a0"))
                     );
+                    print_engine(&stats, (got * blob) as f64);
                     if std::env::var("INTAKE_KEY_DETAIL").is_ok() {
                         drop(writers);
                         match Arc::try_unwrap(receiver) {
