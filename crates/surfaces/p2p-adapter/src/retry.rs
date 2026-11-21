@@ -1586,8 +1586,14 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         }
+        // A pool of its own: the process's default pool may be another
+        // test's, and stop with it.
+        let pool = workers::Pool::start(workers::Config::unplaced(1)).unwrap();
         let (tx, rx) = nuclei::sync::mpsc::channel(4);
-        let task = spawn_failure_recorder(storage::stores::Peerstore::new(Arc::clone(&store)), rx);
+        let task = spawn_failure_recorder(
+            storage::stores::Peerstore::new(Arc::clone(&store)).placed_on(Some(&pool)),
+            rx,
+        );
         let send = |peer: String, acknowledged: bool, generation: Option<u64>| {
             let tx = tx.clone();
             async move {
