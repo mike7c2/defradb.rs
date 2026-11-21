@@ -111,7 +111,9 @@ pub mod stores;
 // Re-export commonly used types for convenience.
 #[cfg(not(target_arch = "wasm32"))]
 pub use backends::start_pool;
-pub use backends::{with_worker_io, RegolithStore, RegolithStoreOptions, StoreMemory, WorkerIo};
+pub use backends::{
+    with_worker_io, MemoryBudget, RegolithStore, RegolithStoreOptions, StoreMemory, WorkerIo,
+};
 pub use corekv::{
     Error, IterOptions, Iterator, KvPair, Reader, ReaderWriter, Result, Store, Txn, Writer,
 };

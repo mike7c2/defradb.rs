@@ -18,6 +18,7 @@ pub mod test_suite;
 #[cfg(not(target_arch = "wasm32"))]
 pub use regolith::start_pool;
 pub use regolith::{
-    with_worker_io, RegolithStore, RegolithStoreOptions, RegolithTxn, StoreMemory, WorkerIo,
+    with_worker_io, MemoryBudget, RegolithStore, RegolithStoreOptions, RegolithTxn, StoreMemory,
+    WorkerIo,
 };
 pub use shared::{DurabilityMode, TransactionStatsHandle, TransactionStatsSnapshot};
