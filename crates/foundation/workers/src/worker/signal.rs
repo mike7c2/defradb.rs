@@ -2,13 +2,14 @@
 //! pushes a woken task onto, and the parking protocol that wakes the worker
 //! only while it sleeps, so a busy worker is never woken.
 
-use std::sync::atomic::{fence, AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{fence, AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::task::{Wake, Waker};
 
 use regolith::sync::SegQueue;
 
 use super::slab::Key;
+use crate::clock::Clock;
 
 const RUNNING: u8 = 0;
 const PARKED: u8 = 1;
@@ -123,21 +124,43 @@ pub(crate) struct TaskWaker {
     signal: Arc<Signal>,
     key: Key,
     scheduled: AtomicBool,
+    /// When the task was last queued to run, read from `clock`; kept only
+    /// while slow tasks are reported.
+    clock: Option<Arc<dyn Clock>>,
+    queued_at: AtomicU64,
 }
 
 impl TaskWaker {
     /// A waker for a task that is queued to run already.
+    #[cfg(test)]
     pub(crate) fn new(signal: Arc<Signal>, key: Key) -> Arc<TaskWaker> {
+        Self::timed(signal, key, None)
+    }
+
+    /// [`new`](Self::new), noting on `clock` when each wake queues the task.
+    pub(crate) fn timed(
+        signal: Arc<Signal>,
+        key: Key,
+        clock: Option<Arc<dyn Clock>>,
+    ) -> Arc<TaskWaker> {
+        let queued_at = clock.as_ref().map_or(0, |clock| clock.now_micros());
         Arc::new(TaskWaker {
             signal,
             key,
             scheduled: AtomicBool::new(true),
+            clock,
+            queued_at: AtomicU64::new(queued_at),
         })
     }
 
     /// The worker is about to poll the task: a wake from now on queues it again.
     pub(crate) fn clear(&self) {
         self.scheduled.store(false, Ordering::SeqCst);
+    }
+
+    /// When the task was last queued to run, on the waker's clock.
+    pub(crate) fn queued_at(&self) -> u64 {
+        self.queued_at.load(Ordering::Acquire)
     }
 }
 
@@ -148,6 +171,9 @@ impl Wake for TaskWaker {
 
     fn wake_by_ref(self: &Arc<Self>) {
         if !self.scheduled.swap(true, Ordering::AcqRel) {
+            if let Some(clock) = &self.clock {
+                self.queued_at.store(clock.now_micros(), Ordering::Release);
+            }
             self.signal.schedule(self.key);
         }
     }

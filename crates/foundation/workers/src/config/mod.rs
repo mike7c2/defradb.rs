@@ -144,6 +144,11 @@ pub struct Config {
     /// A poll running longer than this is reported and its worker is routed
     /// around until it returns.
     pub stuck_after: Duration,
+    /// A task that takes longer than this from its arrival on its worker to
+    /// its end is reported, with where its time went: waiting behind its
+    /// document's earlier task, running, ready but behind other tasks, and
+    /// waiting for what it awaited. Zero reports nothing and reads no clock.
+    pub slow_task_after: Duration,
     /// How often each worker re-reads its pinning and priority to catch an
     /// external reset.
     pub recheck_every: Duration,
@@ -189,6 +194,7 @@ impl Default for Config {
             io_budget: 32,
             idle_spin: Duration::from_micros(50),
             stuck_after: Duration::from_millis(10),
+            slow_task_after: Duration::ZERO,
             recheck_every: Duration::from_secs(1),
             blocking_threads: 2,
             blocking_queue: 256,
@@ -299,6 +305,7 @@ impl fmt::Debug for Config {
             .field("io_budget", &self.io_budget)
             .field("idle_spin", &self.idle_spin)
             .field("stuck_after", &self.stuck_after)
+            .field("slow_task_after", &self.slow_task_after)
             .field("recheck_every", &self.recheck_every)
             .field("blocking_threads", &self.blocking_threads)
             .field("blocking_queue", &self.blocking_queue)

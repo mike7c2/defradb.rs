@@ -148,6 +148,8 @@ where
                     {
                         if error.is_rate_limited() {
                             tracing::debug!(event_kind, %error, "P2P rate-limited");
+                        } else if error.is_already_in_progress() {
+                            tracing::debug!(event_kind, %error, "P2P event duplicates work in progress");
                         } else if error.is_retriable() {
                             tracing::warn!(event_kind, %error, "P2P transport event lost a transaction conflict");
                         } else {

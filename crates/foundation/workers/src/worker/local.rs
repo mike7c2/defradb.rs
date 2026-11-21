@@ -36,6 +36,22 @@ struct Task {
     meta: Meta,
     /// Already reported as stuck: never reported again.
     reported: bool,
+    /// Where its time went, while slow tasks are reported.
+    times: Option<TaskTimes>,
+}
+
+/// Where a task's time went, in microseconds on the worker's clock.
+#[derive(Clone, Copy, Default)]
+struct TaskTimes {
+    /// When it arrived on the worker.
+    arrived: u64,
+    /// Waiting behind earlier tasks of its key before it started.
+    behind_key: u64,
+    /// Ready to run but behind other tasks on the run queue.
+    ready: u64,
+    /// Running.
+    busy: u64,
+    polls: u32,
 }
 
 impl Drop for Task {
@@ -121,8 +137,14 @@ impl Local {
                 _admitted: None,
                 daemon,
             },
+            None,
         );
         Ok(completion)
+    }
+
+    /// Whether slow tasks are reported, and so timed.
+    fn timing(&self) -> bool {
+        !self.tuning.slow_task_after.is_zero()
     }
 
     fn insert(
@@ -131,13 +153,24 @@ impl Local {
         future: LocalFuture,
         fail: Option<Arc<dyn Fail>>,
         meta: Meta,
+        arrived: Option<u64>,
     ) {
         let mut tasks = self.tasks.borrow_mut();
         let key = tasks.next_key();
         if !meta.daemon {
             self.live.set(self.live.get() + 1);
         }
-        let waker = TaskWaker::new(self.shared.signal.clone(), key);
+        let times = self.timing().then(|| {
+            let now = self.now();
+            let arrived = arrived.unwrap_or(now);
+            TaskTimes {
+                arrived,
+                behind_key: now.saturating_sub(arrived),
+                ..TaskTimes::default()
+            }
+        });
+        let clock = times.map(|_| Arc::clone(&self.clock));
+        let waker = TaskWaker::timed(self.shared.signal.clone(), key, clock);
         tasks.insert(Task {
             future: Some(future),
             waker,
@@ -145,6 +178,7 @@ impl Local {
             name,
             meta,
             reported: false,
+            times,
         });
         drop(tasks);
         bump(&self.shared.counters.tasks);
@@ -152,9 +186,12 @@ impl Local {
     }
 
     /// Starts a submitted job, or queues it behind its key's running task.
-    pub(super) fn start(&self, job: Job) {
+    pub(super) fn start(&self, mut job: Job) {
         if self.closed.get() {
             return drop_quietly(job);
+        }
+        if self.timing() {
+            job.arrived = self.now();
         }
         let job = match job.key {
             Some(key) => match self.keyed.borrow_mut().admit(key, job) {
@@ -173,6 +210,7 @@ impl Local {
             name,
             key,
             admitted,
+            arrived,
             ..
         } = job;
         let fail: Arc<dyn Fail> = fail;
@@ -185,6 +223,7 @@ impl Local {
                 _admitted: Some(admitted),
                 daemon: false,
             },
+            Some(arrived),
         );
     }
 
@@ -193,14 +232,16 @@ impl Local {
         let taken = self.tasks.borrow_mut().get_mut(key).and_then(|task| {
             task.waker.clear();
             let future = task.future.take()?;
+            let queued_at = task.times.map(|_| task.waker.queued_at());
             Some((
                 future,
                 Waker::from(task.waker.clone()),
                 task.name,
                 task.reported,
+                queued_at,
             ))
         });
-        let Some((mut future, waker, name, reported)) = taken else {
+        let Some((mut future, waker, name, reported, queued_at)) = taken else {
             return false;
         };
         let start = self.now();
@@ -212,6 +253,19 @@ impl Local {
         let mut cx = Context::from_waker(&waker);
         let result = panic::catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(&mut cx)));
         let long = self.after_poll(name, start, reported);
+        if let Some(queued_at) = queued_at {
+            let end = self.now();
+            if let Some(times) = self
+                .tasks
+                .borrow_mut()
+                .get_mut(key)
+                .and_then(|task| task.times.as_mut())
+            {
+                times.ready += start.saturating_sub(queued_at);
+                times.busy += end.saturating_sub(start);
+                times.polls += 1;
+            }
+        }
         match result {
             Ok(Poll::Pending) => match self.tasks.borrow_mut().get_mut(key) {
                 Some(task) => {
@@ -267,6 +321,9 @@ impl Local {
         }
         drop_quietly(future);
         let Some(task) = task else { return };
+        if let Some(times) = task.times {
+            self.report_if_slow(task.name, times);
+        }
         if !task.meta.daemon {
             self.live.set(self.live.get().saturating_sub(1));
         }
@@ -278,6 +335,28 @@ impl Local {
         if let Some(job) = next {
             self.launch(job);
         }
+    }
+
+    /// Reports a task that took longer than the limit, with where its time
+    /// went: the rest of its life it waited for what it awaited.
+    fn report_if_slow(&self, name: &'static str, times: TaskTimes) {
+        let lived = self.now().saturating_sub(times.arrived);
+        if lived < micros(self.tuning.slow_task_after) {
+            return;
+        }
+        bump(&self.shared.counters.slow_tasks);
+        let awaiting = lived.saturating_sub(times.behind_key + times.ready + times.busy);
+        tracing::warn!(
+            task = name,
+            worker = self.shared.id.index,
+            total_ms = lived / 1000,
+            behind_key_ms = times.behind_key / 1000,
+            ready_ms = times.ready / 1000,
+            busy_ms = times.busy / 1000,
+            awaiting_ms = awaiting / 1000,
+            polls = times.polls,
+            "a slow task: its time behind its key, ready behind other tasks, running, and awaiting"
+        );
     }
 
     /// Nothing admitted is left to run.

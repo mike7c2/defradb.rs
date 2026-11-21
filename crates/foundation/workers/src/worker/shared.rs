@@ -39,6 +39,9 @@ pub(crate) struct Job {
     /// Bound to this worker (its owner); never moved to another.
     pub bound: bool,
     pub admitted: Admitted,
+    /// When its worker took it from the inbox, while slow tasks are
+    /// reported.
+    pub arrived: u64,
 }
 
 impl Job {
@@ -78,6 +81,7 @@ impl Job {
                 key,
                 bound,
                 admitted,
+                arrived: 0,
             },
             completion,
         )
@@ -121,6 +125,7 @@ pub(crate) struct Counters {
     pub tasks: AtomicU64,
     pub panics: AtomicU64,
     pub long_polls: AtomicU64,
+    pub slow_tasks: AtomicU64,
     pub moved_out: AtomicU64,
     pub repins: AtomicU64,
     pub priority_resets: AtomicU64,
@@ -143,6 +148,9 @@ pub struct WorkerStats {
     pub panics: u64,
     /// Polls that ran past the stuck limit.
     pub long_polls: u64,
+    /// Tasks that took longer than [`Config::slow_task_after`](crate::Config::slow_task_after)
+    /// and were reported; none while that is zero.
+    pub slow_tasks: u64,
     /// Queued jobs moved off this worker while it was stuck.
     pub moved_out: u64,
     /// Times this worker found itself off its CPUs and pinned itself again.
@@ -342,6 +350,7 @@ impl WorkerShared {
             tasks: read(&self.counters.tasks),
             panics: read(&self.counters.panics),
             long_polls: read(&self.counters.long_polls),
+            slow_tasks: read(&self.counters.slow_tasks),
             moved_out: read(&self.counters.moved_out),
             repins: read(&self.counters.repins),
             priority_resets: read(&self.counters.priority_resets),
