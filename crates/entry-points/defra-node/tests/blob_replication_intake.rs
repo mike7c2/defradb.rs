@@ -224,9 +224,35 @@ async fn start_counted(
     Ok((Arc::new(node), stats))
 }
 
+/// CPU seconds the process's threads whose names start with `prefix` have
+/// used.
+fn thread_cpu_seconds(prefix: &str) -> f64 {
+    let ticks: u64 = std::fs::read_dir("/proc/self/task")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|task| {
+            std::fs::read_to_string(task.path().join("comm"))
+                .is_ok_and(|name| name.starts_with(prefix))
+        })
+        .filter_map(|task| std::fs::read_to_string(task.path().join("stat")).ok())
+        .filter_map(|stat| {
+            let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+            Some(fields.get(11)?.parse::<u64>().ok()? + fields.get(12)?.parse::<u64>().ok()?)
+        })
+        .sum();
+    ticks as f64 / 100.0
+}
+
 /// What the store's engine wrote and read, against `payload` bytes of blobs
 /// taken in: the write amplification of the WAL, flushes and compaction.
 fn print_engine(stats: &regolith::Statistics, payload: f64) {
+    println!(
+        "cpu: compaction threads {:.1}s, database workers {:.1}s, network {:.1}s (every node of the process)",
+        thread_cpu_seconds("regolith-compac"),
+        thread_cpu_seconds("defra-worker"),
+        thread_cpu_seconds("defra-node-edge"),
+    );
     use regolith::Ticker;
     let mib = |ticker| stats.get_ticker(ticker) as f64 / 1_048_576.0;
     let payload = payload / 1_048_576.0;
