@@ -37,12 +37,28 @@ pub struct MemoryBudget {
 }
 
 impl MemoryBudget {
-    /// Divide `bytes`: half for the block cache, and at most six sixteenths
-    /// for the memtables, which leaves an eighth for the arena chunks a
-    /// memtable reserves past its size and the top-level index of each table.
+    /// Divide `bytes` for reads first: half for the block cache, and at most
+    /// six sixteenths for the memtables, which leaves an eighth for the arena
+    /// chunks a memtable reserves past its size. Below 16 MiB the smallest
+    /// write buffer no longer fits.
     pub fn of(bytes: usize) -> Self {
-        let block_cache = bytes / 2;
-        let write_buffer = (bytes / 16).clamp(MIN_WRITE_BUFFER, MAX_WRITE_BUFFER);
+        Self::divided(bytes, bytes / 2, bytes / 16)
+    }
+
+    /// Divide `bytes` for writes first: a quarter for the block cache, and at
+    /// most six tenths for the memtables. A store of large values that are
+    /// written once and seldom read again (recordings, files) gains little
+    /// from a cache, and a larger write buffer flushes fewer, larger tables,
+    /// which compaction then rewrites less often: taking in 120 KiB blobs,
+    /// the device wrote 80 times the payload with 16 MiB write buffers, 62
+    /// with 26 MiB, 45 with 40 MiB and 32 with 64 MiB.
+    pub fn for_writes(bytes: usize) -> Self {
+        Self::divided(bytes, bytes / 4, bytes / 10)
+    }
+
+    fn divided(bytes: usize, block_cache: usize, write_buffer: usize) -> Self {
+        let block_cache = block_cache.min(bytes);
+        let write_buffer = write_buffer.clamp(MIN_WRITE_BUFFER, MAX_WRITE_BUFFER);
         let shards = (block_cache / MIN_SHARD_BYTES).max(1);
         let shard_bits = shards.ilog2().min(MAX_SHARD_BITS);
         Self {
@@ -55,16 +71,20 @@ impl MemoryBudget {
 
 impl RegolithStoreOptions {
     /// Bound what the engine holds in memory by `bytes`, divided as
-    /// [`MemoryBudget::of`] says. Index and filter blocks are read through
-    /// the block cache, so the budget holds however many tables the store
-    /// has: a point read pays one cache lookup for them, and a read from
-    /// disk when they were evicted.
+    /// [`MemoryBudget::of`] says.
+    pub fn with_memory_budget(self, bytes: usize) -> Self {
+        self.with_memory(MemoryBudget::of(bytes))
+    }
+
+    /// Bound what the engine holds in memory as `budget` divides it. Index
+    /// and filter blocks are read through the block cache, so the budget
+    /// holds however many tables the store has: a point read pays one cache
+    /// lookup for them, and a read from disk when they were evicted.
     ///
     /// What the engine holds is not all a node holds: DefraDB's own queues
     /// and the network have bounds of their own (`SyncTuning`), and the
     /// allocator keeps some freed memory.
-    pub fn with_memory_budget(mut self, bytes: usize) -> Self {
-        let budget = MemoryBudget::of(bytes);
+    pub fn with_memory(mut self, budget: MemoryBudget) -> Self {
         self.engine = self
             .engine
             .block_cache_size(budget.block_cache)
@@ -86,12 +106,24 @@ mod tests {
     fn a_budget_is_divided_within_itself() {
         for mib in [16usize, 64, 256, 1024, 4096] {
             let bytes = mib << 20;
-            let budget = MemoryBudget::of(bytes);
-            assert_eq!(budget.block_cache, bytes / 2);
-            assert!(budget.block_cache + 6 * budget.write_buffer <= bytes || mib < 16 * 6);
-            assert!(budget.block_cache >> budget.shard_bits >= 4 << 20 || budget.shard_bits == 0);
+            for budget in [MemoryBudget::of(bytes), MemoryBudget::for_writes(bytes)] {
+                assert!(
+                    budget.block_cache + 6 * budget.write_buffer <= bytes,
+                    "{mib} MiB: {budget:?}"
+                );
+                assert!(
+                    budget.block_cache >> budget.shard_bits >= 4 << 20 || budget.shard_bits == 0,
+                    "{mib} MiB: {budget:?}"
+                );
+            }
         }
+        assert_eq!(MemoryBudget::of(256 << 20).block_cache, 128 << 20);
         assert_eq!(MemoryBudget::of(256 << 20).write_buffer, 16 << 20);
+        assert_eq!(MemoryBudget::for_writes(256 << 20).block_cache, 64 << 20);
+        assert_eq!(
+            MemoryBudget::for_writes(512 << 20).write_buffer,
+            (512 << 20) / 10
+        );
         assert_eq!(MemoryBudget::of(4096 << 20).write_buffer, 64 << 20);
         assert_eq!(MemoryBudget::of(4 << 20).write_buffer, 1 << 20);
     }
@@ -101,10 +133,15 @@ mod tests {
     /// index and filters are in the cache rather than pinned beside it.
     #[test]
     fn the_engine_stays_inside_its_budget_while_the_store_grows() {
+        let budget = 16usize << 20;
+        stays_inside(budget, MemoryBudget::of(budget));
+        stays_inside(budget, MemoryBudget::for_writes(budget));
+    }
+
+    fn stays_inside(budget: usize, division: MemoryBudget) {
         workers::block_on(async {
             let dir = tempfile::tempdir().unwrap();
-            let budget = 16usize << 20;
-            let mut options = RegolithStoreOptions::default().with_memory_budget(budget);
+            let mut options = RegolithStoreOptions::default().with_memory(division);
             options.engine = options
                 .engine
                 .clone()
@@ -151,8 +188,7 @@ mod tests {
                 "held {worst} of a {budget} budget: {memory:?}"
             );
             assert_eq!(
-                memory.block_cache_capacity,
-                (budget / 2) as u64,
+                memory.block_cache_capacity, division.block_cache as u64,
                 "{memory:?}"
             );
             assert_eq!(memory.pinned_metadata_bytes, 0, "{memory:?}");
