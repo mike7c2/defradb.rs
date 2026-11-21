@@ -759,6 +759,12 @@ impl Node {
         self.node_identity_did.as_deref()
     }
 
+    /// What the store's engine holds in memory now: its block cache,
+    /// memtables and table metadata.
+    pub fn store_memory(&self) -> storage::StoreMemory {
+        self.database.store().memory()
+    }
+
     /// Cryptographically verify a committed block and return its signer DID.
     ///
     /// This reads the signature linked by `cid`, verifies it over the

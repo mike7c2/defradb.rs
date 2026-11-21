@@ -38,6 +38,7 @@ mod hooks;
 pub(crate) mod iterator;
 mod listener;
 mod log_layout;
+mod memory;
 pub mod merge;
 mod post_commit;
 mod prefix;
@@ -50,6 +51,7 @@ mod transaction;
 mod worker_io;
 
 pub use config::RegolithStoreOptions;
+pub use memory::StoreMemory;
 pub use store::RegolithStore;
 pub use transaction::RegolithTxn;
 #[cfg(not(target_arch = "wasm32"))]
