@@ -44,6 +44,26 @@ pub trait MergeView: MaybeSendSync {
         cid: &Cid,
     ) -> Result<Option<Vec<(String, FieldValue)>>, String>;
 
+    /// [`Self::composite_fields`] narrowed to the fields named in `names`,
+    /// the same entries in the same order.
+    ///
+    /// A field that is not named is not decoded, so a validator that needs a
+    /// few small fields does not pay for decoding a large one beside them.
+    /// Every linked block is still read: which fields a block carries is
+    /// known only once it is read.
+    async fn composite_fields_named(
+        &self,
+        cid: &Cid,
+        names: &[&str],
+    ) -> Result<Option<Vec<(String, FieldValue)>>, String> {
+        Ok(self.composite_fields(cid).await?.map(|fields| {
+            fields
+                .into_iter()
+                .filter(|(name, _)| names.contains(&name.as_str()))
+                .collect()
+        }))
+    }
+
     /// The genesis composite reached by following first heads from `cid`.
     /// `None` when an ancestor on the way is not held.
     async fn genesis(&self, cid: &Cid) -> Result<Option<Cid>, String>;
@@ -150,35 +170,15 @@ where
         &self,
         cid: &Cid,
     ) -> Result<Option<Vec<(String, FieldValue)>>, String> {
-        let Some(composite) = self.load(cid).await? else {
-            return Ok(None);
-        };
-        let mut fields = Vec::new();
-        for link in composite.links.iter().flatten() {
-            let value = match self.load(&link.link).await? {
-                None => FieldValue::NotHeld(link.link),
-                Some(field) if field.encryption.is_some() => FieldValue::Encrypted,
-                // An Immutable block stands for its fields, each reported by name.
-                Some(Block {
-                    delta: CrdtDelta::Immutable(payload),
-                    ..
-                }) => {
-                    fields.extend(
-                        payload
-                            .fields
-                            .iter()
-                            .map(|(name, data)| (name.clone(), decode(data))),
-                    );
-                    continue;
-                }
-                Some(field) => field
-                    .delta
-                    .field()
-                    .map_or(FieldValue::Undecodable, |delta| decode(delta.data)),
-            };
-            fields.push((link.name.clone(), value));
-        }
-        Ok(Some(fields))
+        self.linked_fields(cid, |_| true).await
+    }
+
+    async fn composite_fields_named(
+        &self,
+        cid: &Cid,
+        names: &[&str],
+    ) -> Result<Option<Vec<(String, FieldValue)>>, String> {
+        self.linked_fields(cid, |name| names.contains(&name)).await
     }
 
     async fn genesis(&self, cid: &Cid) -> Result<Option<Cid>, String> {
@@ -253,6 +253,51 @@ where
 }
 
 impl<S: Store, B: blockstore::Blockstore> DbMergeView<'_, S, B> {
+    /// The fields `cid` links to whose names `wanted` accepts; only those
+    /// are decoded.
+    async fn linked_fields<W>(
+        &self,
+        cid: &Cid,
+        wanted: W,
+    ) -> Result<Option<Vec<(String, FieldValue)>>, String>
+    where
+        W: Fn(&str) -> bool + Send + Sync,
+    {
+        let Some(composite) = self.load(cid).await? else {
+            return Ok(None);
+        };
+        let mut fields = Vec::new();
+        for link in composite.links.iter().flatten() {
+            let value = match self.load(&link.link).await? {
+                None => FieldValue::NotHeld(link.link),
+                Some(field) if field.encryption.is_some() => FieldValue::Encrypted,
+                // An Immutable block stands for its fields, each reported by name.
+                Some(Block {
+                    delta: CrdtDelta::Immutable(payload),
+                    ..
+                }) => {
+                    fields.extend(
+                        payload
+                            .fields
+                            .iter()
+                            .filter(|(name, _)| wanted(name))
+                            .map(|(name, data)| (name.clone(), decode(data))),
+                    );
+                    continue;
+                }
+                _ if !wanted(&link.name) => continue,
+                Some(field) => field
+                    .delta
+                    .field()
+                    .map_or(FieldValue::Undecodable, |delta| decode(delta.data)),
+            };
+            if wanted(&link.name) {
+                fields.push((link.name.clone(), value));
+            }
+        }
+        Ok(Some(fields))
+    }
+
     /// The verdict's snapshot, opened on first use. A read that arrives while
     /// another opens it waits for that one rather than opening a second.
     pub(super) async fn snapshot(&self) -> Result<&DbTxn<S>, String> {
