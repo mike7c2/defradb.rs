@@ -59,7 +59,15 @@ pub trait MergeValidator: MaybeSendSync {
     ) -> Result<MergeVerdict, String>;
 }
 
+/// A rule that claims collections from their own definition.
+pub type ClaimRule = Arc<dyn Fn(&CollectionVersion) -> bool + Send + Sync>;
+
 /// The collections an app has claimed and the validator that governs them.
+///
+/// A collection is claimed by name ([`MergeGovernance::new`]), by a rule
+/// ([`MergeGovernance::claiming`]), or both. A rule is asked of every
+/// collection each time a composite is judged, so a collection defined after
+/// the node started is governed from the moment it exists.
 ///
 /// A claimed collection is judged only by the validator: the ACP merge hook
 /// does not run for it, and a claimed collection with no validator installed
@@ -67,6 +75,7 @@ pub trait MergeValidator: MaybeSendSync {
 #[derive(Clone, Default)]
 pub struct MergeGovernance {
     collections: RapidHashSet<String>,
+    rule: Option<ClaimRule>,
     validator: Option<Arc<dyn MergeValidator>>,
 }
 
@@ -75,8 +84,32 @@ impl MergeGovernance {
     pub fn new(collections: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
             collections: collections.into_iter().map(Into::into).collect(),
+            rule: None,
             validator: None,
         }
+    }
+
+    /// Claim every collection the rule accepts.
+    ///
+    /// The rule is replicated behaviour, as a verdict is: two nodes must agree
+    /// on whether a collection is governed, or one merges what the other
+    /// refuses. It must therefore be a function of the [`CollectionVersion`]
+    /// alone (its name, its governance root, its fields) and never read the
+    /// wall clock, the node's identity, or any state kept beside the
+    /// definition. It is called on the merge path for every composite, so it
+    /// must be cheap.
+    pub fn claiming(rule: impl Fn(&CollectionVersion) -> bool + Send + Sync + 'static) -> Self {
+        Self::default().with_rule(rule)
+    }
+
+    /// Also claim every collection the rule accepts, beside any claimed by
+    /// name. See [`MergeGovernance::claiming`] for what a rule may depend on.
+    pub fn with_rule(
+        mut self,
+        rule: impl Fn(&CollectionVersion) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.rule = Some(Arc::new(rule));
+        self
     }
 
     pub fn with_validator(mut self, validator: Arc<dyn MergeValidator>) -> Self {
@@ -86,6 +119,7 @@ impl MergeGovernance {
 
     pub fn governs(&self, collection: &CollectionVersion) -> bool {
         self.collections.contains(&collection.name)
+            || self.rule.as_ref().is_some_and(|rule| rule(collection))
     }
 
     pub fn validator(&self) -> Option<&Arc<dyn MergeValidator>> {

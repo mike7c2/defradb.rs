@@ -28,6 +28,6 @@ pub use signature::SignatureStatus;
 #[cfg(not(target_arch = "wasm32"))]
 pub use sweep::start_governance_sweep;
 pub use sweep::{run_governance_sweep, SWEEP_BUDGET, SWEEP_INTERVAL};
-pub use validator::{MergeCandidate, MergeGovernance, MergeValidator};
+pub use validator::{ClaimRule, MergeCandidate, MergeGovernance, MergeValidator};
 pub use verdict::MergeVerdict;
 pub use view::{FieldValue, MergeView};

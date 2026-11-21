@@ -30,6 +30,7 @@ use regolith::sync::Notify;
 use schema::{CollectionVersion, FieldDescription, FieldKind};
 use storage::RegolithStore;
 
+mod claim;
 mod definition;
 mod lookup;
 mod named;
