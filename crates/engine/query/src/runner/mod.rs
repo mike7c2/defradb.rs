@@ -38,6 +38,8 @@ mod json_conflicts;
 mod json_conflicts_tests;
 mod mutation;
 mod mutation_inputs;
+#[cfg(test)]
+mod needs_input_log_tests;
 mod owner_confirmation;
 mod owners;
 mod pinned;
