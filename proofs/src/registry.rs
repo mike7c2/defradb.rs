@@ -1240,6 +1240,15 @@ pub const PROPERTIES: &[Property] = &[
     },
     Property {
         family: "Retry input and marker fencing",
+        name: "INV_EveryMarkerScheduled — an ack or empty-peer clear deletes a peer's schedule row only when a validated scan found no marker, so a registration that commits meanwhile is never left unscheduled",
+        axis: Tla,
+        anchor: "crates/engine/storage/src/stores/peerstore.rs scope_markers_left, CompleteMarker, ClearPeer, RegisterScopeMarkerAttempt, get_retry_peers; crates/engine/storage/src/stores/peerstore_schedule_race_tests.rs",
+        model_ref: "MC_RetryPeerSchedule_{Green,Red_PlainScan}.cfg",
+        tiers: &[Boundary],
+        bound_by: "",
+    },
+    Property {
+        family: "Retry input and marker fencing",
         name: "INV_QueuedPushOwnsLiveMarker — admission requires current durable ownership and elapsed backpressure",
         axis: Tla,
         anchor: "crates/engine/storage/src/stores/peerstore.rs admit_push_scope; crates/surfaces/p2p-adapter/src/retry.rs spawn_failure_recorder; crates/database/p2p/src/sync/coordinator/push_worker.rs run_push_job",
