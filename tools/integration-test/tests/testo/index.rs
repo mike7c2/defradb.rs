@@ -21,6 +21,7 @@ mod json_array_filter;
 mod json_composite;
 mod json_descending_array;
 mod json_descending_range;
+mod json_range_paths;
 mod json_unique;
 mod json_unique_array;
 mod like_nil;

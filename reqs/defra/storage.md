@@ -43,6 +43,13 @@ An ordered query over an indexed field with `limit: 3, offset: 2` reads `limit +
 
 An indexed `[]`, in a typed array field or at any path of a JSON field, is stored as an empty array entry, apart from the null entry a missing field or a null array gets. `_all` over `[]` is true and over a null array false, as Go's filter says, so an `_all` filter served by the index returns the documents whose array is `[]` along with those whose elements pass. `_any`, `_eq`, `_ne`, `_nin`, `_like`, ranges and `_eq: null` never return a document for its `[]`, and their `indexFetches` do not count its entry. A unique array index holds any number of `[]`. Go writes no entry for `[]`, so its `_all` index scans miss those documents; the entry is node-local and changes nothing on the wire. Opening a store written with the older layout rebuilds its indexes.
 
+# `defra.index.json_range_paths`: Range conditions on two JSON paths each keep their path
+
+- **Parents:** ["defra.index"]
+- **Scenarios:** ["index::json_range_paths::ranges_on_two_paths", "index::json_range_paths::all_ranges_on_two_paths", "index::json_range_paths::a_range_and_ne_on_two_paths", "index::json_range_paths::two_bounds_on_one_path_still_narrow"]
+
+On `custom: JSON @index`, `{custom: {a: {_gt: 10}, b: {_lt: 20}}}` returns `{"a": 30, "b": 5}`, the same holds under `_all` for `{"a": [30], "b": [5]}`, and `{a: {_gt: 10}, b: {_ne: 25}}` returns it too. A bound is never applied at a path other than its own: when the range conditions name different paths, the index scan keeps one path and leaves the other to the filter. Two bounds on one path, `{a: {_gt: 10, _lt: 20}}`, still narrow the scan to that range.
+
 # `defra.index.json_descending_path`: A descending JSON index keeps its paths ascending
 
 - **Parents:** ["defra.index"]
