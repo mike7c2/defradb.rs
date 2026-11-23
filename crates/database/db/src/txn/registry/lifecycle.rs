@@ -291,17 +291,6 @@ impl<S: Store + 'static> TransactionRegistry for DbTransactionRegistry<S> {
             .map_err(|error| unavailable(error, handle))?
     }
 
-    async fn add_collection_as(
-        &self,
-        context: &RequestContext,
-        sdl: &str,
-    ) -> std::result::Result<Vec<schema::CollectionVersion>, TransactionError> {
-        let id = context_txn(context)?;
-        self.add_collection_in_txn_as(context, &id, sdl)
-            .await
-            .map_err(operation_error)
-    }
-
     async fn get_collections_as(
         &self,
         context: &RequestContext,

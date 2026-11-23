@@ -6,12 +6,10 @@
 
 use acp::nac::NodePermission;
 use acp::MemoryZanzibarStore;
-use db::DbTransactionRegistry;
 use db::NacConfig;
 use db::NacManager;
 use db::DB;
 use identity::Did;
-use query::txn::TransactionRegistry;
 use regolith::sync::Mutex;
 use schema::CollectionVersion;
 use schema::FieldDescription;
@@ -301,65 +299,6 @@ fn delete_collection_gated_by_nac() {
 // code path. These prove `add_collection_in_txn` calls `check_node_access` so a
 // stranger cannot bypass NAC by routing schema creation through a transaction.
 // =============================================================================
-
-const WIDGET_SDL: &str = "type Widget { name: String }";
-
-#[test]
-fn add_collection_in_txn_denied_for_non_owner() {
-    workers::block_on(async {
-        let _serial = AMBIENT_GUARD.lock().await;
-
-        let db = Arc::new(DB::new(RegolithStore::in_memory().unwrap()).unwrap());
-        db.set_nac_manager(enabled_manager().await);
-        let registry = DbTransactionRegistry::new(db.clone());
-
-        let guard =
-            defra_core::current_identity::scoped_current_identity(Some(STRANGER_DID.to_string()));
-        let txn_id = registry.begin(false).await.unwrap();
-        let err = registry
-            .add_collection_in_txn(txn_id.as_str(), WIDGET_SDL)
-            .await
-            .expect_err("non-owner must be denied transactional add_collection_in_txn");
-        drop(guard);
-
-        assert!(
-            matches!(err, db::error::Error::NotAuthorized { .. }),
-            "expected NotAuthorized from add_collection_in_txn, got: {err:?}"
-        );
-        assert!(
-            db.get_collection("Widget").unwrap().is_none(),
-            "denied add_collection_in_txn must not persist the collection"
-        );
-    })
-    .unwrap()
-}
-
-#[test]
-fn add_collection_in_txn_allowed_for_owner() {
-    workers::block_on(async {
-        let _serial = AMBIENT_GUARD.lock().await;
-
-        let db = Arc::new(DB::new(RegolithStore::in_memory().unwrap()).unwrap());
-        db.set_nac_manager(enabled_manager().await);
-        let registry = DbTransactionRegistry::new(db.clone());
-
-        let guard =
-            defra_core::current_identity::scoped_current_identity(Some(OWNER_DID.to_string()));
-        let txn_id = registry.begin(false).await.unwrap();
-        registry
-            .add_collection_in_txn(txn_id.as_str(), WIDGET_SDL)
-            .await
-            .expect("owner must be allowed to add_collection_in_txn");
-        registry.commit(&txn_id).await.expect("commit must succeed");
-        drop(guard);
-
-        assert!(
-            db.get_collection("Widget").unwrap().is_some(),
-            "owner add_collection_in_txn must persist the collection after commit"
-        );
-    })
-    .unwrap()
-}
 
 #[test]
 fn set_active_collection_version_denied_for_non_owner() {

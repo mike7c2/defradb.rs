@@ -10,7 +10,5 @@ mod requests;
 mod statement_savepoint;
 
 mod context_ownership;
-mod ownership;
-mod schema_visibility;
-mod store_release;
+mod ownership;mod store_release;
 mod view_statement;

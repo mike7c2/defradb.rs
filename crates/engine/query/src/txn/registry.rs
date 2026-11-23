@@ -173,20 +173,6 @@ pub trait TransactionRegistry: MaybeSendSync + 'static {
         context.mirror(self.discard(handle)).await
     }
 
-    /// Create the collections `sdl` defines in the transaction `context`
-    /// carries. They are visible to requests in it, and to others once it
-    /// commits.
-    async fn add_collection_as(
-        &self,
-        context: &RequestContext,
-        sdl: &str,
-    ) -> std::result::Result<Vec<schema::CollectionVersion>, TransactionError> {
-        let _ = (context, sdl);
-        Err(TransactionError::not_supported(
-            "transaction-scoped schema changes are not supported in this configuration",
-        ))
-    }
-
     /// The collection versions `selector` picks for the caller `context`
     /// names, in the transaction it carries if it carries one (its own
     /// uncommitted writes included), ordered by name then version ID.
