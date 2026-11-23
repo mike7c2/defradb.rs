@@ -1339,6 +1339,21 @@ RUNS=(
   "MC_NodeShutdown_Red_OpenTransaction.cfg NodeShutdown.tla RED" # a transaction left open (a commit refused at shutdown) holds regolith's close for its timeout
   "MC_NodeDrop_Green.cfg NodeDrop.tla GREEN" # a node dropped without shutdown aborts its tasks and releases its pool; the drop waits for none
   "MC_NodeDrop_Red_SweepOutsideSet.cfg NodeDrop.tla RED" # the sweep in a slot of its own outlives a dropped node and keeps its pool alive
+  "MC_StorePurge_Green.cfg StorePurge.tla GREEN" # an embedded node with or without a handler, both store kinds: wiped after close, opened after the wipe
+  "MC_StorePurge_Green_Vera.cfg StorePurge.tla GREEN" # the wipe waits for the embedded Vera node to stop and removes its directories
+  "MC_StorePurge_Green_MemoryVera.cfg StorePurge.tla GREEN" # a memory store drops nothing but still removes the Vera directories, on both paths
+  "MC_StorePurge_Green_Cli.cfg StorePurge.tla GREEN" # defradb start wipes only after the Vera stop and the close succeeded
+  "MC_StorePurge_Red_WipeBeforeClose.cfg StorePurge.tla RED" # the wipe runs before the database closed (INV_NoWipeWhileOpen)
+  "MC_StorePurge_Red_OpenBeforeWipe.cfg StorePurge.tla RED" # the node opens again before its wipe (INV_NoOpenBeforeWipe)
+  "MC_StorePurge_Red_ShutdownInsideRequest.cfg StorePurge.tla RED" # the teardown runs inside the request and waits for its own drain (LIVE_PurgeServesAgain)
+  "MC_StorePurge_Red_NoHandlerStillStops.cfg StorePurge.tla RED" # a refused purge stops the node anyway (INV_RefusedPurgeTouchesNothing)
+  "MC_StorePurge_Red_DoublePurge.cfg StorePurge.tla RED" # a second request starts a second teardown (INV_OnePurgePerRun)
+  "MC_StorePurge_Red_RestartAfterFailedWipe.cfg StorePurge.tla RED" # the node starts over a wipe that failed (INV_NoRestartAfterFailedTeardown)
+  "MC_StorePurge_Red_WipeWhileVeraHeld.cfg StorePurge.tla RED" # the Vera directories are removed while it runs (INV_NoWipeWhileOpen)
+  "MC_StorePurge_Red_WipeKeyring.cfg StorePurge.tla RED" # the keyring is in the removal set (INV_KeyringKept)
+  "MC_StorePurge_Red_MemorySkipsVeraDirs.cfg StorePurge.tla RED" # a memory store keeps the old Vera chain (INV_NothingSurvives)
+  "MC_StorePurge_Red_CliWipeAfterVeraStopFailed.cfg StorePurge.tla RED" # the CLI wipes and restarts after a failed Vera stop (INV_NoRestartAfterFailedTeardown)
+  "MC_StorePurge_Red_CliWipeAfterCloseFailed.cfg StorePurge.tla RED" # the CLI wipes and restarts after a failed close (INV_NoRestartAfterFailedTeardown)
   "MC_NodeDrop_Red_NoAbortOnDrop.cfg NodeDrop.tla RED" # a shutdown set that does not abort on drop leaves every task holding the database
   "MC_NodeDrop_Red_DropAwaits.cfg NodeDrop.tla RED" # the dropping thread waits for an aborted task to end
   "MC_EmbeddedVeraStop_Green.cfg EmbeddedVeraStop.tla GREEN" # requests drain before the embedded Vera node stops; the stop has a deadline and frees the directory

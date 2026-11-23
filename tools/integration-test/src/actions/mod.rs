@@ -178,6 +178,7 @@ client_actions! {
         GetNodeIdentity,
         ListAllEncryptedIndexes,
         NewNode,
+        Purge,
         SaveDocs,
         Restart,
         Start,

@@ -20,3 +20,5 @@ testo index::json_array_filter::all_keeps_an_empty_array
 # With an index on the related field, Go returns ties in index order and ignores the second order condition; Rust applies it.
 testo index::query_with_relation_tie_order::a_page_of_ties_follows_the_second_condition_with_an_index
 testo index::query_with_relation_tie_order::ties_follow_the_second_condition_with_an_index
+# A Rust node embedded without a purge handler refuses a store purge with 501; Go's node always runs under its CLI and purges.
+testo node::purge::purge_without_a_handler_is_refused

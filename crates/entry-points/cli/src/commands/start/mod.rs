@@ -5,6 +5,7 @@ mod node;
 mod node_identity;
 mod p2p;
 mod pool_args;
+mod purge;
 mod run;
 mod server;
 mod server_acp;
@@ -359,9 +360,38 @@ impl StartArgs {
         // default soft limit (256 under macOS launchd) runs out.
         fd_limit::raise_nofile_limit();
 
-        // Start the node
-        let node = Node::new(config, user_identity, edge).await?;
-        node.run().await
+        // A purge restarts the node on the address it served, as Go's
+        // PurgeAndRestart does: bound once, so a port 0 stays the same port.
+        let address: std::net::SocketAddr =
+            config
+                .api
+                .address
+                .parse()
+                .map_err(|e: std::net::AddrParseError| {
+                    crate::error::Error::InvalidApiAddress(
+                        config.api.address.clone(),
+                        e.to_string(),
+                    )
+                })?;
+        let listener = std::net::TcpListener::bind(address).map_err(|e| {
+            crate::error::Error::InvalidConfig(format!("failed to bind to {address}: {e}"))
+        })?;
+        config.api.address = listener.local_addr()?.to_string();
+        let mut signals = run::Signals::new()?;
+        loop {
+            let node = Node::new(config.clone(), user_identity.clone(), edge.clone())
+                .await?
+                .with_http_listener(listener.try_clone()?);
+            match node.run_until(&mut signals).await? {
+                run::RunOutcome::Stopped => return Ok(()),
+                run::RunOutcome::Purged(target) => {
+                    tracing::info!("Purging the store and restarting the node");
+                    edge.spawn_blocking(move || storage::wipe(&target))
+                        .await
+                        .map_err(|e| crate::error::Error::PurgeTeardown(e.to_string()))??;
+                }
+            }
+        }
     }
 
     /// Set up Orbis ring threshold signing.

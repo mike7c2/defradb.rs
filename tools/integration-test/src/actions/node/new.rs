@@ -3,7 +3,7 @@ use crate::client_type::ClientType;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::nodes::NodeSpec;
+use crate::nodes::{NodeSpec, ProcessBinary};
 use crate::scenario::{Common, Failure, Op};
 use crate::test_case::State;
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,23 @@ pub struct NewNode {
     /// authenticates as a node.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub without_node_identity: bool,
+    /// `defradb start` of this binary in a process of its own, whatever the
+    /// client; the test then runs over HTTP under the in-process client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<ProcessBinary>,
+    /// A Rust node built without a purge handler.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_purge_handler: bool,
+    /// Development mode, which a purge needs; unset, a Rust node's HTTP
+    /// server has it and a process node does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub development: Option<bool>,
+    /// A process node keeps its keyring on, so its peer key lives there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keyring: bool,
+    /// More `start` flags for a process node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub start_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub expected_data: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,6 +133,11 @@ impl Op for NewNode {
         probe.iroh = false;
         probe.registered_identity = false;
         probe.without_node_identity = false;
+        probe.process = None;
+        probe.no_purge_handler = false;
+        probe.development = None;
+        probe.keyring = false;
+        probe.start_args = Vec::new();
         probe.node_identity_seed = None;
         probe.enable_signing = false;
         probe.key_type = None;
@@ -165,6 +187,11 @@ impl Op for NewNode {
             txn_ttl,
             se_key: self.searchable_encryption_key()?,
             index_gate,
+            process: self.process,
+            no_purge_handler: self.no_purge_handler,
+            development: self.development,
+            keyring: self.keyring,
+            start_args: self.start_args.clone(),
             ..Default::default()
         };
         state.start_node(self.common.node(), spec);

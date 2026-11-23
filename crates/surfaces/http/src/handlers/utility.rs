@@ -15,7 +15,6 @@ use serde_json::{Map, Value};
 use crate::error::{http_error_from_backend_message, HttpError};
 use crate::identity_extractor::ExtractIdentity;
 use crate::nac_guard::require_permission;
-use crate::request_scope::bound;
 use crate::router::{AppState, NodePermission};
 
 /// Response for node identity endpoint (Go-compatible).
@@ -92,7 +91,9 @@ pub async fn dump(
 
 /// POST /api/v0/purge
 ///
-/// Purges all data from the database.
+/// Asks the embedding application to wipe the store and restart the node, as
+/// Go's `PurgeAndRestart` does. Answered at once: the wipe runs once the node
+/// has stopped serving, outside this request.
 ///
 /// WARNING: This is a destructive operation that cannot be undone.
 ///
@@ -105,17 +106,23 @@ pub async fn purge(
 
     if !state.dev_mode {
         return Err(HttpError::Forbidden(
-            "cannot purge database when development mode is disabled".into(),
+            "operation not permitted whilst development mode is disabled. Operation: Purge".into(),
         ));
     }
 
-    bound(state.require_collection_mgmt()?, &identity.context())
-        .purge()
-        .await
+    let Some(purge) = state.purge.as_ref() else {
+        return Err(HttpError::NotImplemented(PURGE_NEEDS_HANDLER.into()));
+    };
+    purge
+        .request_purge()
         .map_err(http_error_from_backend_message)?;
 
     Ok(StatusCode::OK)
 }
+
+/// What `/purge` answers when the node has no purge handler.
+pub const PURGE_NEEDS_HANDLER: &str = "purge needs the embedding application to wipe the store \
+and restart the node: register a purge handler (NodeBuilder::with_purge_handler)";
 
 #[cfg(test)]
 mod tests {

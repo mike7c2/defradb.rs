@@ -261,7 +261,7 @@ pub trait CollectionLookup: defra_core::thread_bounds::MaybeSendSync {
 
 /// Trait for collection management operations beyond basic CRUD.
 ///
-/// Provides action listing, purge, collection lookups and collection drops,
+/// Provides action listing, collection lookups and collection drops,
 /// that operate at the collection level rather than the document level.
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
@@ -270,9 +270,6 @@ pub trait CollectionManagementOperations: CollectionLookup {
 
     /// List actions that have not completed successfully.
     async fn list_actions(&self) -> Result<Vec<defra_core::ActionExecution>, String>;
-
-    /// Purge all data from all collections.
-    async fn purge(&self) -> Result<(), String>;
 
     /// Get a collection by name.
     async fn get_collection_by_name(
@@ -519,4 +516,13 @@ pub trait ViewOperations: defra_core::thread_bounds::MaybeSendSync {
 pub trait DumpOperations: defra_core::thread_bounds::MaybeSendSync {
     /// Dump all database key/value pairs as a list of human-readable strings.
     async fn print_dump(&self) -> Result<Vec<String>, String>;
+}
+
+/// The node's answer to `POST /purge`: it records the request and returns
+/// at once; the embedding application wipes the store and restarts the node
+/// once the node has stopped serving, outside the request.
+pub trait PurgeOperations: defra_core::thread_bounds::MaybeSendSync {
+    /// Asks for one purge. A repeat while one is pending is accepted and
+    /// changes nothing.
+    fn request_purge(&self) -> Result<(), String>;
 }

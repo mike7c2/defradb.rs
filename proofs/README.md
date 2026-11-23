@@ -92,6 +92,7 @@ section is the **diff**: what is proven vs. the accepted gap.
 | Signing identity store | TLA+ & Lean | defra-core, defra-node, ffi |
 | Worker default pool | TLA+ & Lean | workers |
 | Node shutdown order | TLA+ / Lean | defra-node, embedded, edge, vera-embedded, acp, http, query, db, storage |
+| Store purge | TLA+ / Lean | http, defra-node, cli, storage |
 | Inbound stream admission | TLA+, Lean | p2p |
 | Vector index link maintenance | TLA+ | storage, db-index |
 | Peer fetch stats | Lean | p2p |
