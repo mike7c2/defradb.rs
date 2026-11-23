@@ -1348,6 +1348,7 @@ RUNS=(
   "MC_StorePurge_Red_ShutdownInsideRequest.cfg StorePurge.tla RED" # the teardown runs inside the request and waits for its own drain (LIVE_PurgeServesAgain)
   "MC_StorePurge_Red_WipeAfterOtherShutdown.cfg StorePurge.tla RED" # shutdown_and_wipe wipes after the application's own shutdown left the store open (INV_NoWipeWhileOpen)
   "MC_StorePurge_Red_NoHandlerStillStops.cfg StorePurge.tla RED" # a refused purge stops the node anyway (INV_RefusedPurgeTouchesNothing)
+  "MC_StorePurge_Red_PurgeOutsideDevelopment.cfg StorePurge.tla RED" # a node not in development mode accepts the purge and wipes (INV_PurgeOnlyInDevelopment)
   "MC_StorePurge_Red_DoublePurge.cfg StorePurge.tla RED" # a second request starts a second teardown (INV_OnePurgePerRun)
   "MC_StorePurge_Red_RestartAfterFailedWipe.cfg StorePurge.tla RED" # the node starts over a wipe that failed (INV_NoRestartAfterFailedTeardown)
   "MC_StorePurge_Red_WipeWhileHandleHeld.cfg StorePurge.tla RED" # shutdown_and_wipe wipes while a second handle keeps the store locked (INV_NoWipeWhileOpen)

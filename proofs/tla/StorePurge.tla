@@ -8,8 +8,10 @@
 \*
 \* Who acts:
 \*   * a client, which sends up to two purge requests while the node serves;
-\*   * the purge handler, which answers each request and, through a
-\*     once-only gate, starts at most one teardown per run of the node;
+\*   * the purge handler, which answers each request: it refuses one when
+\*     the node is not in development mode (403, as Go's PurgeAndRestart),
+\*     then one with no purge handler registered (501), and otherwise,
+\*     through a once-only gate, starts at most one teardown per run;
 \*   * the teardown: drain the requests, stop the embedded Vera node, close
 \*     the database, then wipe and start the node again;
 \*   * on the Embedded path only, the embedding application, which may keep
@@ -43,9 +45,12 @@
 \*      directories is still there when the node serves again -
 \*      INV_NothingSurvives;
 \*   4. the keyring is removed - INV_KeyringKept;
-\*   5. a refused purge (no handler) changes anything - INV_RefusedPurgeTouchesNothing;
-\*   6. a run starts two teardowns - INV_OnePurgePerRun;
-\*   7. the node starts again after a teardown or a wipe that failed -
+\*   5. a refused purge (no development mode, or no handler) changes
+\*      anything - INV_RefusedPurgeTouchesNothing;
+\*   6. a purge is accepted on a node not in development mode -
+\*      INV_PurgeOnlyInDevelopment;
+\*   7. a run starts two teardowns - INV_OnePurgePerRun;
+\*   8. the node starts again after a teardown or a wipe that failed -
 \*      INV_NoRestartAfterFailedTeardown;
 \* and what must happen: an accepted purge ends with the node serving again,
 \* or with the node exited on a failure - LIVE_PurgeServesAgain.
@@ -65,6 +70,7 @@ CONSTANTS
   Paths,                  \* the teardown paths a run may take: "Embedded", "Cli"
   Stores,                 \* the store kinds a run may use: "Persistent", "Memory"
   Veras,                  \* whether an embedded Vera node runs: "None", "Embedded"
+  Developments,           \* whether the node runs in development mode
   Handlers,               \* for the Embedded path, whether a purge handler is registered
   HeldElsewhere,          \* for the Embedded path, whether the application keeps a second handle
   OtherCallers,           \* for the Embedded path, whether the application may call Node::shutdown itself
@@ -72,6 +78,7 @@ CONSTANTS
   WaitVera,               \* guard: the wipe waits for the Vera node to stop
   OpenAfterWipe,          \* guard: the node opens again only after the wipe
   ShutdownOutsideRequest, \* guard: the request is answered before the teardown starts
+  DevelopmentChecked,     \* guard: outside development mode the purge is refused first and nothing stops
   HandlerChecked,         \* guard: without a handler the purge is refused and nothing stops
   GateOnce,               \* guard: one teardown per run of the node
   NoRestartAfterFailedWipe, \* guard: a failed wipe ends the run instead of restarting
@@ -95,6 +102,7 @@ VARIABLES
   path,          \* the teardown path this behaviour takes
   store,         \* the store kind
   vera,          \* whether an embedded Vera node runs
+  development,   \* whether the node runs in development mode
   handler,       \* whether a purge handler is registered
   otherHandle,   \* the application holds a second handle to the node
   otherCaller,   \* the application may shut the node down itself
@@ -111,7 +119,7 @@ VARIABLES
                  \* handler, or "held" by a teardown running inside it
   purges,        \* how many teardowns the gate let start in this run
   accepted,      \* a purge was accepted in the first run
-  refused,       \* a purge was answered with the no-handler refusal
+  refused,       \* a purge was refused (no development mode, or no handler)
   otherShut,     \* the application's own Node::shutdown ran
   blind,         \* the purge's teardown went on without seeing how the shutdown went
   veraStop,      \* how the Vera stop went
@@ -122,7 +130,7 @@ VARIABLES
   openedBeforeWipe,     \* ghost: the node opened again before its wipe
   restartedAfterFailure \* ghost: the node started again after a failed teardown or wipe
 
-vars == <<path, store, vera, handler, otherHandle, otherCaller, phase, run,
+vars == <<path, store, vera, development, handler, otherHandle, otherCaller, phase, run,
           storeOpen, storeLocked, veraRunning, storeData, veraDirs, keyring,
           requests, req, purges, accepted, refused, otherShut, blind, veraStop,
           closeResult, wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
@@ -133,6 +141,7 @@ TypeOK ==
   /\ path \in Paths
   /\ store \in Stores
   /\ vera \in Veras
+  /\ development \in BOOLEAN
   /\ handler \in BOOLEAN
   /\ otherHandle \in BOOLEAN
   /\ otherCaller \in BOOLEAN
@@ -165,6 +174,8 @@ Init ==
   /\ path \in Paths
   /\ store \in Stores
   /\ vera \in Veras
+  \* Development mode is a node setting on either path.
+  /\ development \in Developments
   \* `defradb start` always has its run loop as the handler.
   /\ handler \in IF path = "Cli" THEN {TRUE} ELSE Handlers
   \* `defradb start` owns the only handle and runs the only shutdown.
@@ -197,7 +208,7 @@ Init ==
   /\ restartedAfterFailure = FALSE
 
 \* The variables the teardown steps never touch.
-fixed == <<path, store, vera, handler, otherHandle, otherCaller>>
+fixed == <<path, store, vera, development, handler, otherHandle, otherCaller>>
 
 \* The client sends a purge request, in the first run, while the node still
 \* accepts requests, one at a time. A node the application shut down
@@ -215,11 +226,32 @@ Request ==
                  veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
                  openedBeforeWipe, restartedAfterFailure>>
 
+\* Whether a request gets past the development-mode check: the node is in
+\* development mode, or (Red) the check is gone.
+PastDevelopment == development \/ ~DevelopmentChecked
+
+\* The handler answers a request on a node not in development mode, before
+\* any other check (PurgeGate::request, the route's 403). Guarded: it is
+\* refused and nothing stops. Red: this answer never comes, and the request
+\* goes on to the handler checks below as if the node were in development
+\* mode.
+HandleNotDevelopment ==
+  /\ req = "waiting"
+  /\ DevelopmentChecked
+  /\ ~development
+  /\ req' = "none"
+  /\ refused' = TRUE
+  /\ UNCHANGED <<fixed, phase, run, storeOpen, storeLocked, veraRunning, storeData,
+                 veraDirs, keyring, requests, purges, accepted, otherShut, blind,
+                 veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
+                 openedBeforeWipe, restartedAfterFailure>>
+
 \* The handler answers a request the node has no purge handler for.
 \* Guarded: it is refused with 501 and nothing stops. Red: the node stops
 \* anyway, as if the refusal were only a message.
 HandleNoHandler ==
   /\ req = "waiting"
+  /\ PastDevelopment
   /\ ~handler
   /\ req' = "none"
   /\ refused' = TRUE
@@ -237,6 +269,7 @@ HandleNoHandler ==
 \* that waits for it.
 HandleAccepted ==
   /\ req = "waiting"
+  /\ PastDevelopment
   /\ handler
   \* The gate opens once per run; without its guard it opens every time.
   /\ purges = 0 \/ ~GateOnce
@@ -254,6 +287,7 @@ HandleAccepted ==
 \* nothing more starts.
 HandleRepeat ==
   /\ req = "waiting"
+  /\ PastDevelopment
   /\ handler
   /\ GateOnce
   /\ purges >= 1
@@ -414,6 +448,7 @@ Open ==
 
 Next ==
   \/ Request
+  \/ HandleNotDevelopment
   \/ HandleNoHandler
   \/ HandleAccepted
   \/ HandleRepeat
@@ -447,6 +482,9 @@ INV_KeyringKept == keyring
 \* the application shut the node down itself.
 INV_RefusedPurgeTouchesNothing ==
   (refused /\ ~otherShut) => (phase = "serving" /\ storeOpen /\ storeData = StoreClasses /\ keyring)
+
+\* A purge is accepted only on a node in development mode.
+INV_PurgeOnlyInDevelopment == accepted => development
 
 \* One teardown per run of the node.
 INV_OnePurgePerRun == purges <= 1
