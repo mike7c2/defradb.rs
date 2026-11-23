@@ -29,7 +29,9 @@ paths can give the very same bytes (`neg_untagged_paths_collide`).
 
 Rust anchors (`crates/engine/storage/src/encoding/json.rs`):
 - `encode_json`, `encode_path`: the path is written ascending in both directions;
-- `decode_path`: the reader, the same for both directions;
+- `decode_path`: the reader, the same for both directions. It also reads the
+  `PathMax` end bytes `1 48`; no step starts with 1 (`encPart_head`), so that
+  never cuts a path short;
 - `encode_json_descending`: flips only the value.
 Range bounds: `path_low_end`, `path_high_end` in
 `crates/engine/query/src/planner/index_selection/filter_to_scan.rs`.
@@ -289,7 +291,7 @@ theorem encPathOpen_append (p q : List Part) :
   | cons a as ih => simp [pathMax.encPathOpen, ih]
 
 -- Every step starts with a byte above the terminator: 6 for a property, 136
--- for an array step.
+-- for an array step. So the reader never takes a step for the end bytes.
 theorem encPart_head (step : Part) : ∃ b bs, encPart step = b :: bs ∧ mTerm < b := by
   cases step with
   -- a property starts with 6

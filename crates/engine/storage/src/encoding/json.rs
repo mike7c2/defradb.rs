@@ -17,12 +17,15 @@ use super::{
     encode_bytes_ascending, encode_bytes_descending, encode_empty_array_ascending,
     encode_empty_array_descending, encode_float64_ascending, encode_float64_descending,
     encode_null_ascending, encode_null_descending, encode_uvarint_ascending, peek_type,
-    EncodedType, BYTES_MARKER, ESCAPED_TERM, INT_MAX, INT_MIN, JSON_MARKER,
+    EncodedType, BYTES_MARKER, ENCODED_NULL, ESCAPED_TERM, INT_MAX, INT_MIN, JSON_MARKER,
 };
 use crate::corekv::{Error, Result};
 
 /// Path terminator after all path parts, before value
 pub const JSON_PATH_END: u8 = b'/'; // 0x2F - matches Go's jsonPathEnd
+
+/// The byte after the path terminator that marks `PathMax`.
+const JSON_PATH_MAX: u8 = JSON_PATH_END + 1;
 
 /// Encode a JSON leaf value with path in ascending order.
 ///
@@ -44,7 +47,7 @@ fn encode_json(mut buf: Vec<u8>, leaf: &JsonLeafValue, descending: bool) -> Vec<
     buf.push(ESCAPED_TERM);
     match &leaf.value {
         JsonScalarValue::PathMax => {
-            buf.push(JSON_PATH_END + 1);
+            buf.push(JSON_PATH_MAX);
             buf
         }
         // No descending value starts with the ascending null byte, so this
@@ -109,22 +112,34 @@ fn encode_scalar_descending(buf: Vec<u8>, value: &JsonScalarValue) -> Vec<u8> {
 
 /// Decode a JSON leaf value from bytes (ascending order).
 ///
-/// Returns the remaining buffer and the decoded JsonLeafValue.
+/// Returns the remaining buffer and the decoded JsonLeafValue. `PathMin` has
+/// the bytes of a null here, so it reads back as `Null`.
 pub fn decode_json_ascending(buf: &[u8]) -> Result<(&[u8], JsonLeafValue)> {
-    let (rest, path) = decode_path(buf)?;
+    let (rest, path, at_max) = decode_path(buf)?;
+    if at_max {
+        return Ok((rest, JsonLeafValue::new(path, JsonScalarValue::PathMax)));
+    }
     let (rest, value) = decode_scalar_ascending(rest)?;
     Ok((rest, JsonLeafValue::new(path, value)))
 }
 
 /// Decode a JSON leaf value from bytes (descending order).
 pub fn decode_json_descending(buf: &[u8]) -> Result<(&[u8], JsonLeafValue)> {
-    let (rest, path) = decode_path(buf)?;
+    let (rest, path, at_max) = decode_path(buf)?;
+    if at_max {
+        return Ok((rest, JsonLeafValue::new(path, JsonScalarValue::PathMax)));
+    }
+    // A descending null is its own byte, so the ascending one can only be PathMin.
+    if let [ENCODED_NULL, rest @ ..] = rest {
+        return Ok((rest, JsonLeafValue::new(path, JsonScalarValue::PathMin)));
+    }
     let (rest, value) = decode_scalar_descending(rest)?;
     Ok((rest, JsonLeafValue::new(path, value)))
 }
 
-/// Decode the marker and path, through the path terminator.
-fn decode_path(buf: &[u8]) -> Result<(&[u8], JsonPath)> {
+/// Decode the marker and path, through the path terminator. The flag is set
+/// for a `PathMax` key, which has no value after it.
+fn decode_path(buf: &[u8]) -> Result<(&[u8], JsonPath, bool)> {
     if buf.is_empty() || buf[0] != JSON_MARKER {
         return Err(Error::Other(format!(
             "expected JSON_MARKER (0x{:02x}), got 0x{:02x}",
@@ -137,7 +152,8 @@ fn decode_path(buf: &[u8]) -> Result<(&[u8], JsonPath)> {
     let mut path = JsonPath::new();
     loop {
         match rest {
-            [ESCAPED_TERM, JSON_PATH_END, tail @ ..] => return Ok((tail, path)),
+            [ESCAPED_TERM, JSON_PATH_END, tail @ ..] => return Ok((tail, path, false)),
+            [ESCAPED_TERM, JSON_PATH_MAX, tail @ ..] => return Ok((tail, path, true)),
             [BYTES_MARKER, ..] => {
                 let (remaining, name) = decode_bytes_ascending(rest)?;
                 let name = String::from_utf8(name)
@@ -230,6 +246,10 @@ fn decode_scalar_descending(buf: &[u8]) -> Result<(&[u8], JsonScalarValue)> {
         ))),
     }
 }
+
+#[cfg(test)]
+#[path = "json_array_path_tests.rs"]
+mod json_array_path_tests;
 
 #[cfg(test)]
 mod tests {
