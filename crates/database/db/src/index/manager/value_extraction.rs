@@ -19,7 +19,7 @@ impl IndexManager {
                 continue;
             }
             for values in self.extract_index_values(doc, index.description(), schema)? {
-                if !values.iter().any(NormalValue::is_nil) {
+                if !storage::index::skips_uniqueness(&values) {
                     keys.insert(self.encode_index_key(index.description(), &values)?);
                 }
             }
@@ -116,13 +116,13 @@ impl IndexManager {
 
     /// Expand a value for multi-value indexing.
     ///
-    /// Arrays are expanded into their elements. Empty arrays result in a single
-    /// NULL value to ensure the document is still indexed.
+    /// Arrays are expanded into their elements. An empty array gets its own
+    /// marker entry, apart from nil, so `_all` can find it.
     pub(super) fn expand_value_for_indexing(value: NormalValue) -> Vec<NormalValue> {
         macro_rules! expand_array {
             ($arr:expr, $variant:ident) => {
                 if $arr.is_empty() {
-                    vec![NormalValue::Null]
+                    vec![NormalValue::EmptyArray]
                 } else {
                     Self::deduplicate_array_values($arr.iter().cloned())
                         .into_iter()
@@ -137,7 +137,7 @@ impl IndexManager {
                 match $opt {
                     Some(arr) => {
                         if arr.is_empty() {
-                            vec![NormalValue::Null]
+                            vec![NormalValue::EmptyArray]
                         } else {
                             Self::deduplicate_array_values(arr.iter().cloned())
                                 .into_iter()
@@ -153,7 +153,7 @@ impl IndexManager {
         macro_rules! expand_nillable_element_array {
             ($arr:expr, $variant:ident) => {
                 if $arr.is_empty() {
-                    vec![NormalValue::Null]
+                    vec![NormalValue::EmptyArray]
                 } else {
                     Self::deduplicate_array_values($arr.iter().cloned())
                         .into_iter()
@@ -204,7 +204,7 @@ impl IndexManager {
             NormalValue::TimeArray(ref arr) => expand_array!(arr, Time),
             NormalValue::DocumentArray(ref arr) => {
                 if arr.is_empty() {
-                    vec![NormalValue::Null]
+                    vec![NormalValue::EmptyArray]
                 } else {
                     arr.iter()
                         .map(|v| NormalValue::Document(Box::new(v.clone())))
@@ -214,7 +214,7 @@ impl IndexManager {
             // JSON array positions are part of their index paths, so repeated values stay distinct.
             NormalValue::JsonArray(ref arr) => {
                 if arr.is_empty() {
-                    vec![NormalValue::Null]
+                    vec![NormalValue::EmptyArray]
                 } else {
                     arr.iter().cloned().map(NormalValue::Json).collect()
                 }
@@ -230,7 +230,7 @@ impl IndexManager {
             NormalValue::NillableDocumentArray(ref opt) => match opt {
                 Some(arr) => {
                     if arr.is_empty() {
-                        vec![NormalValue::Null]
+                        vec![NormalValue::EmptyArray]
                     } else {
                         arr.iter()
                             .map(|v| NormalValue::Document(Box::new(v.clone())))
@@ -263,7 +263,7 @@ impl IndexManager {
             }
             NormalValue::NillableDocumentElementArray(ref arr) => {
                 if arr.is_empty() {
-                    vec![NormalValue::Null]
+                    vec![NormalValue::EmptyArray]
                 } else {
                     arr.iter()
                         .map(|v| match v {

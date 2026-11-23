@@ -20,8 +20,9 @@ use crate::DB;
 /// Bumped whenever an index key encoding changes. Version 1 is the original
 /// single-varint DateTime encoding; version 2 splits seconds from nanos;
 /// version 3 gives each deferred index entry its position record, which the
-/// check at every open does for the deferred indexes alone.
-pub const CURRENT_INDEX_FORMAT: u32 = 3;
+/// check at every open does for the deferred indexes alone; version 4 gives an
+/// empty array its own entry and keeps a descending JSON path ascending.
+pub const CURRENT_INDEX_FORMAT: u32 = 4;
 
 /// Systemstore key holding the format the indexes on disk were written with.
 pub use storage::keys::systemstore::INDEX_FORMAT_KEY;
@@ -39,7 +40,7 @@ impl<S: Store> DB<S> {
         S: 'static,
     {
         let stored = self.stored_index_format().await?;
-        if stored.is_some_and(|format| format >= 2) {
+        if stored.is_some_and(|format| format >= CURRENT_INDEX_FORMAT) {
             self.rebuild_indexes_kept_the_other_way().await?;
         } else {
             self.rebuild_every_index(stored).await?;

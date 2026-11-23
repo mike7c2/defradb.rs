@@ -107,3 +107,54 @@ fn string_field_with_date_like_value_is_left_as_string() {
         rows[0][0]
     );
 }
+
+fn array_rows(value: NormalValue) -> Vec<Vec<NormalValue>> {
+    let mut schema = CollectionVersion::new(
+        "User",
+        "v1",
+        "coll_user",
+        vec![FieldDescription::new(
+            "1",
+            "numbers",
+            FieldKind::int_array(),
+            schema::CType::LwwRegister,
+        )],
+    );
+    let idx = IndexDescription {
+        name: "idx_numbers".to_string(),
+        id: 3,
+        unique: false,
+        kind: None,
+        auto_generated: false,
+        fields: vec![IndexedFieldDescription {
+            name: "numbers".to_string(),
+            descending: false,
+        }],
+    };
+    schema.indexes = vec![idx.clone()];
+    let mgr = IndexManager::from_collection(1, &schema, &crdt::Crdts::default()).unwrap();
+    let mut doc = Document::new(schema.clone());
+    doc.set("numbers", value).unwrap();
+    mgr.extract_index_values(&doc, &idx, &schema).unwrap()
+}
+
+/// An empty array is its own entry, not the null a missing field gets.
+#[test]
+fn an_empty_array_is_not_indexed_as_null() {
+    assert_eq!(
+        array_rows(NormalValue::IntArray(vec![])),
+        vec![vec![NormalValue::EmptyArray]]
+    );
+    assert_eq!(
+        array_rows(NormalValue::NillableIntArray(Some(vec![]))),
+        vec![vec![NormalValue::EmptyArray]]
+    );
+    assert_eq!(
+        array_rows(NormalValue::NillableIntArray(None)),
+        vec![vec![NormalValue::Null]]
+    );
+    assert_eq!(
+        array_rows(NormalValue::NillableIntElementArray(vec![None])),
+        vec![vec![NormalValue::Null]]
+    );
+}

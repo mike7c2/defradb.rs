@@ -36,6 +36,13 @@ A counter field can be indexed. After local increments, or after two nodes incre
 
 An ordered query over an indexed field with `limit: 3, offset: 2` reads `limit + offset` index entries, returns exactly the page after skipping two, and leaves the query offset to the limit node so it is not applied twice. The same paging is correct when the ordered field is not indexed.
 
+# `defra.index.empty_array`: An empty array has an index entry of its own
+
+- **Parents:** ["defra.index"]
+- **Scenarios:** ["index::empty_array::all_on_a_typed_array_finds_the_empty_array", "index::empty_array::other_filters_on_a_typed_array_skip_the_empty_array", "index::empty_array::a_unique_array_index_holds_two_empty_arrays", "index::empty_array::all_on_a_nested_json_array_finds_the_empty_array", "index::empty_array::other_filters_on_a_top_level_json_array_skip_the_empty_array", "index::empty_array::an_update_moves_the_empty_array_entry", "index::json_array_filter::all_keeps_an_empty_array"]
+
+An indexed `[]`, in a typed array field or at any path of a JSON field, is stored as an empty array entry, apart from the null entry a missing field or a null array gets. `_all` over `[]` is true and over a null array false, as Go's filter says, so an `_all` filter served by the index returns the documents whose array is `[]` along with those whose elements pass. `_any`, `_eq`, `_ne`, `_nin`, `_like`, ranges and `_eq: null` never return a document for its `[]`, and their `indexFetches` do not count its entry. A unique array index holds any number of `[]`. Go writes no entry for `[]`, so its `_all` index scans miss those documents; the entry is node-local and changes nothing on the wire. Opening a store written with the older layout rebuilds its indexes.
+
 # `defra.index.json_descending_path`: A descending JSON index keeps its paths ascending
 
 - **Parents:** ["defra.index"]

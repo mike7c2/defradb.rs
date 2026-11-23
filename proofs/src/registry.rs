@@ -2756,6 +2756,17 @@ pub const PROPERTIES: &[Property] = &[
         bound_by: "",
     },
     Property {
+        // The scan pieces are private to the planner and the range iterator;
+        // tools/integration-test/tests/testo/index/empty_array.rs runs the queries. Boundary.
+        family: "Index empty arrays",
+        name: "all_scan_complete / all_scan_sound / value_scan_skips_empty / any_scan_complete / empty_arrays_never_clash: `_all` finds every matching document, empty arrays included, and no other scan returns one",
+        axis: Lean,
+        anchor: "crates/database/db/src/index/manager/value_extraction.rs IndexManager::expand_value_for_indexing; crates/building-blocks/document/src/normal.rs extract_json_leaves; crates/engine/query/src/planner/index_selection/filter_to_scan.rs filter_to_index_scan, all_path, empty_array_scan, full_field_range; crates/engine/storage/src/index/range_iterator.rs RangeIterator::next; crates/engine/storage/src/index/mod.rs skips_uniqueness",
+        model_ref: "AllScanEmptyArray (lake build)",
+        tiers: &[Boundary],
+        bound_by: "",
+    },
+    Property {
         // `sort_in_key_order` is private to the planner, so no contract test
         // reaches it; crates/entry-points/defra-node/tests/in_filter_order.rs runs the
         // queries it orders over an ASC, a DESC and no index. Boundary.

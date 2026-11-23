@@ -59,6 +59,7 @@ section is the **diff**: what is proven vs. the accepted gap.
 | Deferred-ACP overlay consistency | TLA+ | query |
 | ACP outbox and owed registrations | TLA+ & Lean | acp, db, query, defra-node, storage, vera (owed relationship changes specified before the code, #2954; owed counts in staged and settled parts, #3070; the drainer's in-flight mark, journal and batches, #3065) |
 | Order-preserving key encoding | Lean | storage |
+| Index empty arrays | Lean | storage, query, db-index |
 | vera.rs actor spelling | Lean | vera |
 | vera.rs policy creation | TLA+ | vera, vera-embedded |
 | Policy nonce text | Lean | acp |
@@ -256,6 +257,7 @@ headstore); go↔go vs rust↔rust parity (`parity.rs`) localized it to Rust.
 | P2P capability replay gate | Boundary | P2P-wire internal |
 | JWT issuer / algorithm binding | Boundary | DID-binding via `acp.rs`; forge unreachable via CLI |
 | Order-preserving key encoding | Boundary | ordered query may sort in memory; consts `pub(crate)` |
+| Index empty arrays | Boundary | the scan pieces are private to the planner and the range iterator; `tools/integration-test/tests/testo/index/empty_array.rs` runs the queries |
 | vera.rs actor spelling | Boundary | over an abstract key of a secp256k1 or P-256 curve; that distinct keys have distinct spellings is the `did:key` encoding's injectivity, and which spellings vera.rs takes is vera.rs's property; unit tests in `crates/engine/vera-delegation/src/did_spelling.rs`, live case `actor_spelling`, in-process node test `crates/engine/vera-embedded/tests/actor_keys.rs` |
 | vera.rs delegation signing | Boundary | over what the tests observe of a signature, per key kind (ECDSA or Ed25519); that ECDSA and Ed25519 verification are sound is assumed; unit tests in `crates/engine/vera-delegation/src/signer/tests.rs`, `crates/engine/vera-delegation/src/signer/key_type_tests.rs` and `crates/engine/vera/src/vera_rs/provider/signer_tests.rs`, tokens checked by vera.rs's verifier in `crates/engine/vera-delegation/src/bearer/key_types.rs` and `crates/engine/vera/src/vera_rs/bearer/key_types.rs`, token bytes pinned in `crates/engine/vera-delegation/src/bearer/pinned.rs` |
 | vera.rs delegation window | Boundary | over the three times a delegation names and the block time, in whole seconds; that the node's clock stays near the provider's is the light client's freshness bound; unit tests in `crates/engine/vera/src/vera_rs/bearer/request.rs`, `crates/engine/vera/src/vera_rs/bearer.rs` and `crates/engine/vera-delegation/src/bearer/request.rs`, the refusal's wording in `crates/engine/acp/src/delegation_window.rs`, embedded node tests in `crates/entry-points/defra-node/tests/embedded_vera/clock_skew.rs` |

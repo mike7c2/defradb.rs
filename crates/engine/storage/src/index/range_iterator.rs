@@ -45,6 +45,9 @@ pub struct RangeIterator {
     exhausted: bool,
     /// Whether iterating in reverse
     reverse: bool,
+    /// The field a range bounds. Its empty array entries match no range, so
+    /// they are skipped and not counted.
+    range_field: Option<usize>,
 }
 
 impl RangeIterator {
@@ -77,6 +80,7 @@ impl RangeIterator {
             upper_inclusive: true,
             exhausted: false,
             reverse,
+            range_field: None,
         })
     }
 
@@ -118,6 +122,7 @@ impl RangeIterator {
             upper_inclusive: true,
             exhausted: false,
             reverse,
+            range_field: None,
         })
     }
 
@@ -223,6 +228,7 @@ impl RangeIterator {
             upper_inclusive,
             exhausted,
             reverse,
+            range_field: Some(range_field_idx),
         })
     }
 
@@ -284,7 +290,7 @@ impl RangeIterator {
         let (values, doc_suffix) = self.decode_field_values(key)?;
 
         // Determine if this is a NULL entry (doc short ID in key suffix)
-        let has_nil = values.iter().any(|v| v.is_nil());
+        let has_nil = super::skips_uniqueness(&values);
 
         let doc_short_id = if self.is_unique && !has_nil && !value.is_empty() {
             // Unique index with non-NULL value: doc short ID is in the value
@@ -467,6 +473,13 @@ impl IndexIterator for RangeIterator {
                     }
 
                     let entry = self.extract_entry(&kv.key, &kv.value)?;
+                    if self
+                        .range_field
+                        .and_then(|field| entry.values.get(field))
+                        .is_some_and(NormalValue::is_empty_array_entry)
+                    {
+                        continue;
+                    }
                     return Ok(Some(entry));
                 }
                 None => {
