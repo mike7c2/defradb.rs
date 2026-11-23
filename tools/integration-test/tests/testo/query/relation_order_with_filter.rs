@@ -195,3 +195,42 @@ scenario!(
     "name",
     names(&["Bob", "Cid", "Ann"])
 );
+
+fn names_with_ids(people: &[(&str, &str)]) -> Value {
+    json!({ "Book": people
+        .iter()
+        .map(|(name, key)| json!({ "name": name, "_RELID": m::r(&format!("REL_{key}")) }))
+        .collect::<Vec<_>>() })
+}
+
+scenario!(
+    /// Selecting only the relation ID keeps the sort fields.
+    selected_relation_id,
+    "filter: {REL: {rank: {_gt: 0}}}, order: {REL: {score: ASC}}",
+    "name _RELID",
+    names_with_ids(&[("Bob", "bob"), ("Cid", "cid"), ("Ann", "ann")])
+);
+
+scenario!(
+    /// The same with a limit.
+    selected_relation_id_with_limit,
+    "filter: {REL: {rank: {_gt: 0}}}, order: {REL: {score: ASC}}, limit: 2",
+    "name _RELID",
+    names_with_ids(&[("Bob", "bob"), ("Cid", "cid")])
+);
+
+scenario!(
+    /// Selecting only the relation ID without a filter.
+    selected_relation_id_unfiltered,
+    "order: {REL: {score: ASC}}",
+    "name _RELID",
+    names_with_ids(&[("Bob", "bob"), ("Cid", "cid"), ("Ann", "ann")])
+);
+
+scenario!(
+    /// The same with a limit.
+    selected_relation_id_unfiltered_with_limit,
+    "order: {REL: {score: ASC}}, limit: 2",
+    "name _RELID",
+    names_with_ids(&[("Bob", "bob"), ("Cid", "cid")])
+);

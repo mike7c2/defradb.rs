@@ -133,7 +133,13 @@ impl Planner {
             parent_filter,
             &joined_relations,
         )?;
-        plan = self.apply_secondary_id_joins(plan, &mut mapping, select, parent_collection)?;
+        plan = self.apply_secondary_id_joins(
+            plan,
+            &mut mapping,
+            select,
+            parent_collection,
+            &synthetic_order_relations,
+        )?;
         plan = self.apply_aggregate_joins(
             plan,
             &mut mapping,
