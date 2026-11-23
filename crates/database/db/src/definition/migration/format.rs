@@ -21,7 +21,9 @@ use crate::DB;
 /// single-varint DateTime encoding; version 2 splits seconds from nanos;
 /// version 3 gives each deferred index entry its position record, which the
 /// check at every open does for the deferred indexes alone; version 4 gives an
-/// empty array its own entry and keeps a descending JSON path ascending.
+/// empty array its own entry, keeps a descending JSON path ascending and starts
+/// each JSON property step with the bytes marker, which changes ascending JSON
+/// keys too.
 pub const CURRENT_INDEX_FORMAT: u32 = 4;
 
 /// Systemstore key holding the format the indexes on disk were written with.
