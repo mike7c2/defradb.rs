@@ -2732,6 +2732,18 @@ pub const PROPERTIES: &[Property] = &[
         bound_by: "",
     },
     Property {
+        // The marker constants are `pub(crate)`; the storage unit tests in
+        // crates/engine/storage/src/encoding/empty_array.rs check they differ
+        // from null and from each other. Boundary.
+        family: "Order-preserving key encoding",
+        name: "markers_empty_array_band / markers_empty_array_fresh / cross_type_empty_array / empty_array_desc_not_flipped: the empty array markers are free bytes below the integers, the descending one not the flipped ascending one",
+        axis: Lean,
+        anchor: "crates/engine/storage/src/encoding/mod.rs EMPTY_ARRAY, EMPTY_ARRAY_DESC; crates/engine/storage/src/encoding/empty_array.rs encode_empty_array_ascending, encode_empty_array_descending",
+        model_ref: "OrderEncoding.Markers / OrderEncoding.CrossType (lake build)",
+        tiers: &[Boundary],
+        bound_by: "",
+    },
+    Property {
         // `sort_in_key_order` is private to the planner, so no contract test
         // reaches it; crates/entry-points/defra-node/tests/in_filter_order.rs runs the
         // queries it orders over an ASC, a DESC and no index. Boundary.

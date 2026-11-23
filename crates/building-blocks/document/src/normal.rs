@@ -118,6 +118,8 @@ pub enum NormalValue {
     /// JSON leaf value with path for indexing.
     /// Internal type used during index key generation.
     JsonLeaf(JsonLeafValue),
+    /// The index entry of an empty typed array. Internal to index keys.
+    EmptyArray,
 }
 
 #[derive(Clone, Copy)]
@@ -247,6 +249,11 @@ impl NormalValue {
                     is_nil: false,
                     is_nillable: false,
                     is_array: false,
+                },
+                EmptyArray => NormalValueClassification {
+                    is_nil: false,
+                    is_nillable: false,
+                    is_array: false,
                 }
             }
         )
@@ -277,6 +284,15 @@ impl NormalValue {
     /// Returns true if this value is nil/null.
     pub fn is_nil(&self) -> bool {
         self.classification().is_nil
+    }
+
+    /// Whether this is the index entry of an empty array, typed or at a JSON path.
+    pub fn is_empty_array_entry(&self) -> bool {
+        match self {
+            NormalValue::EmptyArray => true,
+            NormalValue::JsonLeaf(leaf) => leaf.value == JsonScalarValue::EmptyArray,
+            _ => false,
+        }
     }
 
     /// Returns true if this value type can be nil.

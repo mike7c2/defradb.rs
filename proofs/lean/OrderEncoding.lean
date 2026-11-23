@@ -241,3 +241,8 @@ from the byte-emitting definitions. -/
 #print axioms OrderEncoding.lookups_nodup
 #print axioms OrderEncoding.neg_written_order_not_increasing
 #print axioms OrderEncoding.neg_keep_dup_not_increasing
+#print axioms OrderEncoding.markers_empty_array_band
+#print axioms OrderEncoding.markers_empty_array_fresh
+#print axioms OrderEncoding.cross_type_empty_array
+#print axioms OrderEncoding.empty_array_desc_not_flipped
+#print axioms OrderEncoding.neg_flipped_fe_is_nan

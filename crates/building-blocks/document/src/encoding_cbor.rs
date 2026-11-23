@@ -263,6 +263,9 @@ pub fn normal_value_to_cbor(value: &NormalValue) -> Result<ciborium::Value> {
         NormalValue::JsonLeaf(_) => Err(Error::CborEncode(
             "JsonLeaf is an internal indexing type and cannot be encoded to CBOR".to_string(),
         )),
+        NormalValue::EmptyArray => Err(Error::CborEncode(
+            "EmptyArray is an internal indexing type and cannot be encoded to CBOR".to_string(),
+        )),
     }
 }
 

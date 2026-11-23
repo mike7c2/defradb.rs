@@ -122,6 +122,11 @@ pub fn encode_field_value(buf: Vec<u8>, val: &NormalValue, descending: bool) -> 
         } else {
             encoding::encode_bytes_ascending(buf, v)
         }),
+        NormalValue::EmptyArray => Ok(if descending {
+            encoding::encode_empty_array_descending(buf)
+        } else {
+            encoding::encode_empty_array_ascending(buf)
+        }),
         NormalValue::Time(v) => encode_time_value(buf, v, descending),
         NormalValue::NillableTime(Some(v)) => encode_time_value(buf, v, descending),
         // JSON leaf values with path+value encoding
@@ -161,6 +166,10 @@ pub fn decode_field_value<'a>(
         EncodedType::Null => {
             let (rest, _) = encoding::decode_if_null(buf);
             Ok((rest, NormalValue::Null))
+        }
+        EncodedType::EmptyArray => {
+            let (rest, _) = encoding::decode_if_empty_array(buf);
+            Ok((rest, NormalValue::EmptyArray))
         }
         EncodedType::Bool => {
             let (rest, v) = if descending {
