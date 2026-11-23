@@ -46,7 +46,7 @@ An indexed `[]`, in a typed array field or at any path of a JSON field, is store
 # `defra.index.json_descending_path`: A descending JSON index keeps its paths ascending
 
 - **Parents:** ["defra.index"]
-- **Scenarios:** ["index::json_descending_array::any_on_a_top_level_array", "index::json_descending_array::any_range_on_a_top_level_array", "index::json_descending_array::any_on_an_array_under_a_property", "index::json_descending_array::any_on_an_array_under_a_nested_path", "index::json_descending_array::a_scan_of_every_entry_reads_each_path"]
+- **Scenarios:** ["index::json_descending_array::any_on_a_top_level_array", "index::json_descending_array::any_range_on_a_top_level_array", "index::json_descending_array::any_on_an_array_under_a_property", "index::json_descending_array::any_on_an_array_under_a_nested_path", "index::json_descending_array::a_scan_of_every_entry_reads_each_path", "index::json_descending_array::any_range_on_an_array_under_a_property", "index::json_descending_array::a_range_on_a_nested_path", "index::json_descending_array::ne_on_a_nested_path"]
 
 On a JSON index with `direction: DESC`, each key holds its path in ascending bytes and only the value inverted, as Go's `EncodeJSONDescending` writes it. `_any` on a top-level or nested array, a range on its elements, and a scan of every entry return the matching documents instead of failing with `invalid escape sequence in descending path` (issue #3143). Each property step starts with the bytes marker, as in Go, so no property step reads as an array step. Opening a store written with the older layout rebuilds its indexes.
 

@@ -23,6 +23,7 @@ testo index::empty_array::other_filters_on_a_top_level_json_array_skip_the_empty
 testo index::empty_array::other_filters_on_a_typed_array_skip_the_empty_array
 # Go refuses `_ne` on a JSON field; Rust accepts it.
 testo index::json_descending_array::a_scan_of_every_entry_reads_each_path
+testo index::json_descending_array::ne_on_a_nested_path
 # With an index on the string, Go's `_like: "%"` drops every document; Rust returns the ones that have the field, as without the index.
 testo index::like_nil::like_skips_a_document_without_the_field
 # Go's JSON index never sees a top-level empty array, so `_all` misses it; Rust finds it, as without the index.
