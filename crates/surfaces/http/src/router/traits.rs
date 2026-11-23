@@ -524,5 +524,19 @@ pub trait DumpOperations: defra_core::thread_bounds::MaybeSendSync {
 pub trait PurgeOperations: defra_core::thread_bounds::MaybeSendSync {
     /// Asks for one purge. A repeat while one is pending is accepted and
     /// changes nothing.
-    fn request_purge(&self) -> Result<(), String>;
+    fn request_purge(&self) -> Result<(), PurgeRefusal>;
+}
+
+/// Why a node refused a purge, before anything stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PurgeRefusal {
+    /// The node is not in development mode (403), Go's text.
+    #[error("operation not permitted whilst development mode is disabled. Operation: Purge")]
+    DevelopmentMode,
+    /// The node has no purge handler to wipe and restart it (501).
+    #[error(
+        "purge needs the embedding application to wipe the store and restart the node: \
+         register a purge handler (NodeBuilder::with_purge_handler)"
+    )]
+    NoHandler,
 }

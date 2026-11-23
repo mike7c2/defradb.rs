@@ -12,7 +12,7 @@ use nuclei::sync::mpsc;
 
 use super::node::Node;
 use crate::config::{Config, DatastoreType};
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// How a run of the node ended.
 #[derive(Debug)]
@@ -21,6 +21,22 @@ pub enum RunOutcome {
     Stopped,
     /// A purge stopped it cleanly: wipe this, then start it again.
     Purged(Box<storage::WipeTarget>),
+}
+
+/// How a run ends once its teardown is over: a purge whose Vera stop or
+/// database close failed ends `defradb start` with that error and wipes
+/// nothing (the CliChecksVeraStop and CliChecksClose guards of
+/// `proofs/tla/StorePurge.tla`).
+pub(super) fn outcome(
+    purge_requested: bool,
+    teardown_failure: Option<String>,
+    target: &storage::WipeTarget,
+) -> Result<RunOutcome> {
+    match (purge_requested, teardown_failure) {
+        (false, _) => Ok(RunOutcome::Stopped),
+        (true, Some(reason)) => Err(Error::PurgeTeardown(reason)),
+        (true, None) => Ok(RunOutcome::Purged(Box::new(target.clone()))),
+    }
 }
 
 /// Records the first purge and asks the node to shut down.
@@ -43,7 +59,7 @@ impl CliPurge {
 }
 
 impl defra_http::PurgeOperations for CliPurge {
-    fn request_purge(&self) -> std::result::Result<(), String> {
+    fn request_purge(&self) -> std::result::Result<(), defra_http::PurgeRefusal> {
         if !self.requested.swap(true, Ordering::SeqCst) {
             // A full channel already holds a shutdown, which this one joins.
             let _ = self.shutdown.try_send(());
@@ -79,4 +95,42 @@ pub(super) fn wipe_target(config: &Config) -> Result<storage::WipeTarget> {
     };
     storage::check_wipe(&target)?;
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target() -> storage::WipeTarget {
+        storage::WipeTarget {
+            store: None,
+            owned_dirs: vec!["/rootdir/vera".into()],
+            kept: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_failed_teardown_ends_the_purge_with_its_error_and_nothing_to_wipe() {
+        for reason in [
+            "the embedded Vera node did not stop: deadline",
+            "the database did not close: busy",
+        ] {
+            match outcome(true, Some(reason.into()), &target()) {
+                Err(Error::PurgeTeardown(got)) => assert_eq!(got, reason),
+                other => panic!("a failed teardown must end the run, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_clean_teardown_hands_over_the_target_and_a_stop_hands_over_none() {
+        assert!(matches!(
+            outcome(true, None, &target()),
+            Ok(RunOutcome::Purged(got)) if got.owned_dirs == target().owned_dirs
+        ));
+        assert!(matches!(
+            outcome(false, Some("busy".into()), &target()),
+            Ok(RunOutcome::Stopped)
+        ));
+    }
 }

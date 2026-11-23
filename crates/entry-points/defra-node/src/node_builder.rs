@@ -72,6 +72,8 @@ pub struct NodeBuilder {
     replica_registration: Option<db::merge::ReplicaRegistration>,
     #[cfg(not(target_arch = "wasm32"))]
     purge_handler: Option<Arc<dyn crate::PurgeHandler>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    development: bool,
     /// How long an idle explicit transaction lives, and how often the sweep
     /// looks; when set, it takes precedence over an HTTP config's setting.
     #[cfg(not(target_arch = "wasm32"))]
@@ -122,6 +124,25 @@ impl NodeBuilder {
     pub fn with_purge_handler(mut self, handler: Arc<dyn crate::PurgeHandler>) -> Self {
         self.purge_handler = Some(handler);
         self
+    }
+
+    /// Development mode, Go's `EnableDevelopment`: a purge is refused without
+    /// it, however it is asked for. An HTTP config's
+    /// [`with_dev_mode`](crate::HttpConfig::with_dev_mode) turns it on too.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_development(mut self, development: bool) -> Self {
+        self.development = development;
+        self
+    }
+
+    /// Whether the node runs in development mode.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn development(&self) -> bool {
+        #[cfg(feature = "http")]
+        let http = self.http_config.as_ref().is_some_and(|http| http.dev_mode);
+        #[cfg(not(feature = "http"))]
+        let http = false;
+        self.development || http
     }
 
     /// What [`Node::shutdown_and_wipe`](crate::Node::shutdown_and_wipe)
@@ -650,6 +671,8 @@ impl NodeBuilder {
             #[cfg(not(target_arch = "wasm32"))]
             purge_handler: self.purge_handler.take(),
             #[cfg(not(target_arch = "wasm32"))]
+            development: self.development(),
+            #[cfg(not(target_arch = "wasm32"))]
             wipe_target,
             replica_registration: self.replica_registration.take(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -729,12 +752,12 @@ impl NodeBuilder {
                     );
                 // The event stream gates chunk events by collection even without the management routes.
                 let server = server.with_collection_lookup_arc(collections.clone());
+                // `/purge` is collection management: without it the route
+                // answers 503, and the gate answers 403 or 501 itself.
                 match http_cfg.collection_management {
-                    // `/purge` is collection management; without a handler it answers 501.
-                    true if node.purge.has_handler() => server
+                    true => server
                         .with_collection_mgmt_arc(collections)
                         .with_purge_arc(node.purge.clone()),
-                    true => server.with_collection_mgmt_arc(collections),
                     false => server,
                 }
             };

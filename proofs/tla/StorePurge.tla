@@ -11,16 +11,21 @@
 \*   * the purge handler, which answers each request and, through a
 \*     once-only gate, starts at most one teardown per run of the node;
 \*   * the teardown: drain the requests, stop the embedded Vera node, close
-\*     the database, then wipe and start the node again.
+\*     the database, then wipe and start the node again;
+\*   * on the Embedded path only, the embedding application, which may keep
+\*     a second handle to the node, and may itself call Node::shutdown before
+\*     the purge's teardown starts.
 \*
 \* The teardown takes one of two paths:
 \*   * Embedded: defra-node's Node::shutdown_and_wipe, whose shutdown (the
 \*     NodeShutdown model) returns an error when the Vera node or the
-\*     database did not stop, and which then wipes nothing; it wipes only
-\*     once it has dropped the node, its last handle, since the closed
-\*     store's directory stays locked while the node lives;
+\*     database did not stop, and which then wipes nothing. A closed store's
+\*     directory stays locked until the node itself is dropped, so it wipes
+\*     only once it has dropped the node as its last handle; and it wipes
+\*     nothing after a shutdown another caller ran, whose outcome it never saw;
 \*   * Cli: `defradb start`, whose run loop stops Vera and closes the
-\*     database itself and returns Purged only when both succeeded.
+\*     database itself, owns the only handle, and returns Purged only when
+\*     both succeeded.
 \*
 \* What the store holds, by key class:
 \*   * Data: documents, blocks, indexes and ACP state, in the store;
@@ -31,8 +36,8 @@
 \* Vera node, when there is one, keeps its directories on disk either way.
 \*
 \* What must never happen:
-\*   1. the wipe runs while the store is open or the Vera node holds its
-\*      directories - INV_NoWipeWhileOpen;
+\*   1. the wipe runs while the store is open or still locked by a live
+\*      node, or the Vera node holds its directories - INV_NoWipeWhileOpen;
 \*   2. the node opens again before the wipe ran - INV_NoOpenBeforeWipe;
 \*   3. anything of the old store, the store-held peer key or the old Vera
 \*      directories is still there when the node serves again -
@@ -51,7 +56,8 @@
 \* crates/entry-points/defra-node/src/purge.rs PurgeGate, Node::purge_as,
 \* Node::shutdown_and_wipe; crates/entry-points/defra-node/src/lib.rs
 \* Node::shutdown; crates/engine/storage/src/wipe.rs wipe;
-\* crates/entry-points/cli/src/commands/start/run.rs Node::run;
+\* crates/entry-points/cli/src/commands/start/run.rs Node::run_until;
+\* crates/entry-points/cli/src/commands/start/purge.rs outcome;
 \* crates/entry-points/cli/src/commands/start/mod.rs StartArgs::execute.
 EXTENDS Naturals
 
@@ -60,6 +66,8 @@ CONSTANTS
   Stores,                 \* the store kinds a run may use: "Persistent", "Memory"
   Veras,                  \* whether an embedded Vera node runs: "None", "Embedded"
   Handlers,               \* for the Embedded path, whether a purge handler is registered
+  HeldElsewhere,          \* for the Embedded path, whether the application keeps a second handle
+  OtherCallers,           \* for the Embedded path, whether the application may call Node::shutdown itself
   WipeAfterClose,         \* guard: the wipe waits for the database to close
   WaitVera,               \* guard: the wipe waits for the Vera node to stop
   OpenAfterWipe,          \* guard: the node opens again only after the wipe
@@ -70,7 +78,9 @@ CONSTANTS
   KeyringExcluded,        \* guard: the keyring is never in the removal set
   MemoryRemovesOwnedDirs, \* guard: the Vera directories are removed under a memory store too
   CliChecksVeraStop,      \* guard: the CLI wipes only when the Vera node stopped
-  CliChecksClose          \* guard: the CLI wipes only when the database closed
+  CliChecksClose,         \* guard: the CLI wipes only when the database closed
+  LastHandleChecked,      \* guard: shutdown_and_wipe wipes only as the node's last handle (WipeWhileHeld)
+  ShutdownOnce            \* guard: shutdown_and_wipe wipes nothing after another caller's shutdown (WipeAfterShutdown)
 
 \* Every key class the store itself holds.
 StoreClasses == {"Data", "StoreHeldPeerKey"}
@@ -86,9 +96,12 @@ VARIABLES
   store,         \* the store kind
   vera,          \* whether an embedded Vera node runs
   handler,       \* whether a purge handler is registered
+  otherHandle,   \* the application holds a second handle to the node
+  otherCaller,   \* the application may shut the node down itself
   phase,         \* where the node is in serving, tearing down and starting again
   run,           \* which start of the node this is: 1, then 2 after a restart
   storeOpen,     \* the database is open
+  storeLocked,   \* a live node still locks the store's directory on disk
   veraRunning,   \* the Vera node runs and holds its directories
   storeData,     \* the key classes of the old store still present
   veraDirs,      \* the old Vera directories are still on disk
@@ -99,18 +112,21 @@ VARIABLES
   purges,        \* how many teardowns the gate let start in this run
   accepted,      \* a purge was accepted in the first run
   refused,       \* a purge was answered with the no-handler refusal
+  otherShut,     \* the application's own Node::shutdown ran
+  blind,         \* the purge's teardown went on without seeing how the shutdown went
   veraStop,      \* how the Vera stop went
   closeResult,   \* how the database close went
   wiped,         \* the wipe ran in this teardown
   wipeResult,    \* how the wipe went
-  wipedWhileHeld,       \* ghost: a wipe ran while the store was open or Vera held its dirs
+  wipedWhileHeld,       \* ghost: a wipe ran while the store was open or locked, or Vera held its dirs
   openedBeforeWipe,     \* ghost: the node opened again before its wipe
   restartedAfterFailure \* ghost: the node started again after a failed teardown or wipe
 
-vars == <<path, store, vera, handler, phase, run, storeOpen, veraRunning,
-          storeData, veraDirs, keyring, requests, req, purges, accepted,
-          refused, veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
-          openedBeforeWipe, restartedAfterFailure>>
+vars == <<path, store, vera, handler, otherHandle, otherCaller, phase, run,
+          storeOpen, storeLocked, veraRunning, storeData, veraDirs, keyring,
+          requests, req, purges, accepted, refused, otherShut, blind, veraStop,
+          closeResult, wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
+          restartedAfterFailure>>
 
 \* Every variable has the kind of value it should.
 TypeOK ==
@@ -118,9 +134,12 @@ TypeOK ==
   /\ store \in Stores
   /\ vera \in Veras
   /\ handler \in BOOLEAN
+  /\ otherHandle \in BOOLEAN
+  /\ otherCaller \in BOOLEAN
   /\ phase \in Phases
   /\ run \in 1..2
   /\ storeOpen \in BOOLEAN
+  /\ storeLocked \in BOOLEAN
   /\ veraRunning \in BOOLEAN
   /\ storeData \subseteq StoreClasses
   /\ veraDirs \in BOOLEAN
@@ -130,6 +149,8 @@ TypeOK ==
   /\ purges \in 0..2
   /\ accepted \in BOOLEAN
   /\ refused \in BOOLEAN
+  /\ otherShut \in BOOLEAN
+  /\ blind \in BOOLEAN
   /\ veraStop \in Results
   /\ closeResult \in Results
   /\ wiped \in BOOLEAN
@@ -146,9 +167,14 @@ Init ==
   /\ vera \in Veras
   \* `defradb start` always has its run loop as the handler.
   /\ handler \in IF path = "Cli" THEN {TRUE} ELSE Handlers
+  \* `defradb start` owns the only handle and runs the only shutdown.
+  /\ otherHandle \in IF path = "Cli" THEN {FALSE} ELSE HeldElsewhere
+  /\ otherCaller \in IF path = "Cli" THEN {FALSE} ELSE OtherCallers
   /\ phase = "serving"
   /\ run = 1
   /\ storeOpen = TRUE
+  \* Only a store on disk has a directory to lock.
+  /\ storeLocked = (store = "Persistent")
   \* The Vera node runs only when one is configured.
   /\ veraRunning = (vera = "Embedded")
   /\ storeData = StoreClasses
@@ -160,6 +186,8 @@ Init ==
   /\ purges = 0
   /\ accepted = FALSE
   /\ refused = FALSE
+  /\ otherShut = FALSE
+  /\ blind = FALSE
   /\ veraStop = "pending"
   /\ closeResult = "pending"
   /\ wiped = FALSE
@@ -169,20 +197,23 @@ Init ==
   /\ restartedAfterFailure = FALSE
 
 \* The variables the teardown steps never touch.
-fixed == <<path, store, vera, handler>>
+fixed == <<path, store, vera, handler, otherHandle, otherCaller>>
 
 \* The client sends a purge request, in the first run, while the node still
-\* accepts requests, one at a time.
+\* accepts requests, one at a time. A node the application shut down
+\* accepts none.
 Request ==
   /\ run = 1
   /\ phase \in {"serving", "stopping"}
+  /\ ~otherShut
   /\ req = "none"
   /\ requests < 2
   /\ requests' = requests + 1
   /\ req' = "waiting"
-  /\ UNCHANGED <<fixed, phase, run, storeOpen, veraRunning, storeData, veraDirs,
-                 keyring, purges, accepted, refused, veraStop, closeResult, wiped,
-                 wipeResult, wipedWhileHeld, openedBeforeWipe, restartedAfterFailure>>
+  /\ UNCHANGED <<fixed, phase, run, storeOpen, storeLocked, veraRunning, storeData,
+                 veraDirs, keyring, purges, accepted, refused, otherShut, blind,
+                 veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
+                 openedBeforeWipe, restartedAfterFailure>>
 
 \* The handler answers a request the node has no purge handler for.
 \* Guarded: it is refused with 501 and nothing stops. Red: the node stops
@@ -195,9 +226,10 @@ HandleNoHandler ==
   \* Without the guard the teardown starts all the same.
   /\ phase' = IF HandlerChecked THEN phase ELSE "stopping"
   /\ purges' = IF HandlerChecked THEN purges ELSE purges + 1
-  /\ UNCHANGED <<fixed, run, storeOpen, veraRunning, storeData, veraDirs, keyring,
-                 requests, accepted, veraStop, closeResult, wiped, wipeResult,
-                 wipedWhileHeld, openedBeforeWipe, restartedAfterFailure>>
+  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
+                 keyring, requests, accepted, otherShut, blind, veraStop, closeResult,
+                 wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
+                 restartedAfterFailure>>
 
 \* The handler answers a request the gate lets through: a teardown starts.
 \* Guarded: the 200 goes out first and the teardown runs outside the request.
@@ -213,9 +245,10 @@ HandleAccepted ==
   /\ phase' = "stopping"
   \* Answered now, or held until the teardown it runs ends.
   /\ req' = IF ShutdownOutsideRequest THEN "none" ELSE "held"
-  /\ UNCHANGED <<fixed, run, storeOpen, veraRunning, storeData, veraDirs, keyring,
-                 requests, refused, veraStop, closeResult, wiped, wipeResult,
-                 wipedWhileHeld, openedBeforeWipe, restartedAfterFailure>>
+  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
+                 keyring, requests, refused, otherShut, blind, veraStop, closeResult,
+                 wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
+                 restartedAfterFailure>>
 
 \* A request the gate already let one teardown through for: answered 200,
 \* nothing more starts.
@@ -225,21 +258,48 @@ HandleRepeat ==
   /\ GateOnce
   /\ purges >= 1
   /\ req' = "none"
-  /\ UNCHANGED <<fixed, phase, run, storeOpen, veraRunning, storeData, veraDirs,
-                 keyring, requests, purges, accepted, refused, veraStop, closeResult,
-                 wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
-                 restartedAfterFailure>>
+  /\ UNCHANGED <<fixed, phase, run, storeOpen, storeLocked, veraRunning, storeData,
+                 veraDirs, keyring, requests, purges, accepted, refused, otherShut,
+                 blind, veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
+                 openedBeforeWipe, restartedAfterFailure>>
 
-\* The drain stops accepting requests and waits for the ones in flight.
+\* The application calls Node::shutdown itself before the purge's teardown
+\* claims the node: it drains, stops Vera and closes the database, each of
+\* which may fail. Its outcome goes to the application, not to the purge.
+OtherShutdown ==
+  /\ otherCaller
+  /\ ~otherShut
+  /\ run = 1
+  /\ phase \in {"serving", "stopping"}
+  /\ req = "none"
+  /\ otherShut' = TRUE
+  /\ veraStop' \in IF vera = "Embedded" THEN {"ok", "failed"} ELSE {"ok"}
+  \* Only a stop that succeeded frees the directories.
+  /\ veraRunning' = (veraRunning /\ veraStop' = "failed")
+  /\ closeResult' \in {"ok", "failed"}
+  /\ storeOpen' = (closeResult' = "failed")
+  \* A memory store's contents go with the closed process memory.
+  /\ storeData' = IF store = "Memory" /\ closeResult' = "ok" THEN {} ELSE storeData
+  /\ UNCHANGED <<fixed, phase, run, storeLocked, veraDirs, keyring, requests, req,
+                 purges, accepted, refused, blind, wiped, wipeResult, wipedWhileHeld,
+                 openedBeforeWipe, restartedAfterFailure>>
+
+\* The purge's teardown claims the node and drains the requests in flight.
+\* Guarded: after the application's own shutdown it stops there, wiping
+\* nothing (WipeAfterShutdown). Red: it goes on as if its own shutdown had
+\* just succeeded, never seeing how the other one went.
 Drain ==
   /\ phase = "stopping"
   \* A held request never ends: it waits for this very drain.
   /\ req = "none"
-  /\ phase' = "drained"
-  /\ UNCHANGED <<fixed, run, storeOpen, veraRunning, storeData, veraDirs, keyring,
-                 requests, req, purges, accepted, refused, veraStop,
-                 closeResult, wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
-                 restartedAfterFailure>>
+  /\ phase' = CASE ~otherShut   -> "drained"
+                [] ShutdownOnce -> "exited"
+                [] OTHER        -> "closed"
+  /\ blind' = (otherShut /\ ~ShutdownOnce)
+  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
+                 keyring, requests, req, purges, accepted, refused, otherShut,
+                 veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
+                 openedBeforeWipe, restartedAfterFailure>>
 
 \* The Vera node is told to stop. It stops, or misses its deadline and keeps
 \* holding its directories.
@@ -249,11 +309,13 @@ StopVera ==
   \* Only a stop that succeeded frees the directories.
   /\ veraRunning' = (veraRunning /\ veraStop' = "failed")
   /\ phase' = "veraStopped"
-  /\ UNCHANGED <<fixed, run, storeOpen, storeData, veraDirs, keyring, requests,
-                 req, purges, accepted, refused, closeResult, wiped,
-                 wipeResult, wipedWhileHeld, openedBeforeWipe, restartedAfterFailure>>
+  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, storeData, veraDirs, keyring,
+                 requests, req, purges, accepted, refused, otherShut, blind,
+                 closeResult, wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
+                 restartedAfterFailure>>
 
-\* The database closes, or fails to and stays open.
+\* The database closes, or fails to and stays open. Either way the node
+\* still exists, so a store on disk stays locked.
 Close ==
   /\ phase = "veraStopped"
   /\ closeResult' \in {"ok", "failed"}
@@ -261,26 +323,34 @@ Close ==
   \* A memory store's contents go with the closed process memory.
   /\ storeData' = IF store = "Memory" /\ closeResult' = "ok" THEN {} ELSE storeData
   /\ phase' = "closed"
-  /\ UNCHANGED <<fixed, run, veraRunning, veraDirs, keyring, requests, req,
-                 purges, accepted, refused, veraStop, wiped, wipeResult,
-                 wipedWhileHeld, openedBeforeWipe, restartedAfterFailure>>
+  /\ UNCHANGED <<fixed, run, storeLocked, veraRunning, veraDirs, keyring, requests,
+                 req, purges, accepted, refused, otherShut, blind, veraStop, wiped,
+                 wipeResult, wipedWhileHeld, openedBeforeWipe, restartedAfterFailure>>
 
 \* Whether this path treats the teardown as failed. The Embedded path's
-\* shutdown returns both errors; the CLI checks each under its guard.
+\* shutdown returns both errors; the CLI checks each under its guard. A
+\* blind teardown saw neither.
 TeardownFails ==
-  \/ veraStop = "failed" /\ (path = "Embedded" \/ CliChecksVeraStop)
-  \/ closeResult = "failed" /\ (path = "Embedded" \/ CliChecksClose)
+  /\ ~blind
+  /\ \/ veraStop = "failed" /\ (path = "Embedded" \/ CliChecksVeraStop)
+     \/ closeResult = "failed" /\ (path = "Embedded" \/ CliChecksClose)
 
 \* Whether the teardown really failed, whatever the code checked.
 TeardownFailed == veraStop = "failed" \/ closeResult = "failed"
 
-\* After the teardown: a failure ends the run with its error; otherwise the
-\* wipe comes next.
+\* Whether shutdown_and_wipe stops because another handle still holds the
+\* node (WipeWhileHeld).
+HandleHeld == otherHandle /\ LastHandleChecked
+
+\* After the teardown: a failure, or a node still held elsewhere, ends the
+\* run with its error; otherwise the purge drops its handle and the wipe
+\* comes next. Dropping it unlocks the store only if no other handle is left.
 Decide ==
   /\ phase = "closed"
-  /\ phase' = IF TeardownFails THEN "exited" ELSE "wiping"
+  /\ phase' = IF TeardownFails \/ HandleHeld THEN "exited" ELSE "wiping"
+  /\ storeLocked' = IF phase' = "wiping" THEN storeLocked /\ otherHandle ELSE storeLocked
   /\ UNCHANGED <<fixed, run, storeOpen, veraRunning, storeData, veraDirs, keyring,
-                 requests, req, purges, accepted, refused, veraStop,
+                 requests, req, purges, accepted, refused, otherShut, blind, veraStop,
                  closeResult, wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
                  restartedAfterFailure>>
 
@@ -306,10 +376,10 @@ Wipe ==
                  THEN FALSE ELSE veraDirs
   \* The keyring is never in the removal set; without the guard it is.
   /\ keyring' = IF wipeResult' = "ok" /\ ~KeyringExcluded THEN FALSE ELSE keyring
-  /\ wipedWhileHeld' = (wipedWhileHeld \/ storeOpen \/ veraRunning)
-  /\ UNCHANGED <<fixed, phase, run, storeOpen, veraRunning, requests, req,
-                 purges, accepted, refused, veraStop, closeResult, openedBeforeWipe,
-                 restartedAfterFailure>>
+  /\ wipedWhileHeld' = (wipedWhileHeld \/ storeOpen \/ storeLocked \/ veraRunning)
+  /\ UNCHANGED <<fixed, phase, run, storeOpen, storeLocked, veraRunning, requests, req,
+                 purges, accepted, refused, otherShut, blind, veraStop, closeResult,
+                 openedBeforeWipe, restartedAfterFailure>>
 
 \* A failed wipe ends the run with its error.
 WipeFailedExit ==
@@ -318,10 +388,10 @@ WipeFailedExit ==
   /\ wipeResult = "failed"
   /\ NoRestartAfterFailedWipe
   /\ phase' = "exited"
-  /\ UNCHANGED <<fixed, run, storeOpen, veraRunning, storeData, veraDirs, keyring,
-                 requests, req, purges, accepted, refused, veraStop,
-                 closeResult, wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
-                 restartedAfterFailure>>
+  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
+                 keyring, requests, req, purges, accepted, refused, otherShut, blind,
+                 veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
+                 openedBeforeWipe, restartedAfterFailure>>
 
 \* The node starts again with the same options: a new run, the store and the
 \* Vera node open, the gate closed again. Guarded: only after a wipe that
@@ -333,18 +403,21 @@ Open ==
   /\ phase' = "serving"
   /\ run' = 2
   /\ storeOpen' = TRUE
+  /\ storeLocked' = (store = "Persistent")
   /\ veraRunning' = (vera = "Embedded")
   /\ purges' = 0
   /\ openedBeforeWipe' = (openedBeforeWipe \/ ~wiped)
   /\ restartedAfterFailure' = (restartedAfterFailure \/ TeardownFailed \/ wipeResult = "failed")
   /\ UNCHANGED <<fixed, storeData, veraDirs, keyring, requests, req, accepted,
-                 refused, veraStop, closeResult, wiped, wipeResult, wipedWhileHeld>>
+                 refused, otherShut, blind, veraStop, closeResult, wiped, wipeResult,
+                 wipedWhileHeld>>
 
 Next ==
   \/ Request
   \/ HandleNoHandler
   \/ HandleAccepted
   \/ HandleRepeat
+  \/ OtherShutdown
   \/ Drain
   \/ StopVera
   \/ Close
@@ -356,8 +429,8 @@ Next ==
 \* Every step that can be taken is eventually taken.
 Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
 
-\* The wipe never runs while the store is open or the Vera node holds its
-\* directories.
+\* The wipe never runs while the store is open or still locked by a live
+\* node, or the Vera node holds its directories.
 INV_NoWipeWhileOpen == ~wipedWhileHeld
 
 \* The node never opens again before its wipe ran.
@@ -370,9 +443,10 @@ INV_NothingSurvives == (run = 2) => (storeData = {} /\ ~veraDirs)
 \* The keyring always keeps the node identity and peer key.
 INV_KeyringKept == keyring
 
-\* A refused purge leaves the node serving with everything it stored.
+\* A refused purge leaves the node serving with everything it stored, unless
+\* the application shut the node down itself.
 INV_RefusedPurgeTouchesNothing ==
-  refused => (phase = "serving" /\ storeOpen /\ storeData = StoreClasses /\ keyring)
+  (refused /\ ~otherShut) => (phase = "serving" /\ storeOpen /\ storeData = StoreClasses /\ keyring)
 
 \* One teardown per run of the node.
 INV_OnePurgePerRun == purges <= 1

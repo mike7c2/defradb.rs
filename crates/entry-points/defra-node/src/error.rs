@@ -278,6 +278,9 @@ pub enum Error {
     /// The in-memory regolith store did not open.
     #[error("failed to open in-memory regolith: {0}")]
     MemoryStoreOpen(#[source] storage::Error),
+    /// A purge was asked of a node not in development mode, Go's text.
+    #[error("operation not permitted whilst development mode is disabled. Operation: Purge")]
+    PurgeNeedsDevelopment,
     /// A purge was asked of a node built without a purge handler.
     #[error("purge needs the embedding application to wipe the store and restart the node: register a purge handler (NodeBuilder::with_purge_handler)")]
     PurgeNeedsHandler,

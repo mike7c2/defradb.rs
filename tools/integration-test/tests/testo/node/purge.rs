@@ -108,28 +108,34 @@ fn users_collection() -> Actions {
 /// A store with a policy, a collection, a document and a relationship;
 /// purged; then the same policy, collection and document again, which
 /// identity 2 can no longer read because its relationship went with the
-/// old store.
+/// old store. Making identity 2 a reader again is new, not a repeat.
 fn wipe_scenario(node: NewNode) -> Vec<Actions> {
     let mut actions: Vec<Actions> = vec![node.into()];
     actions.extend(users_under_policy(0));
-    actions.push(
-        AddDACActorRelationship {
-            target_identity_seed: Some(2),
-            collection: "Users".into(),
-            doc_id: Text::reference("doc0"),
-            relation: "reader".into(),
-            expected_data: json!({ "existedAlready": false }),
-            common: as_identity(1),
-            ..Default::default()
-        }
-        .into(),
-    );
+    actions.push(identity_two_made_reader("doc0"));
     actions.push(identity_two_reads(json!([{ "name": "John" }])));
     actions.push(Purge::default().into());
     actions.push(no_collections());
     actions.extend(users_under_policy(1));
     actions.push(identity_two_reads(json!([])));
+    actions.push(identity_two_made_reader("doc1"));
+    actions.push(identity_two_reads(json!([{ "name": "John" }])));
     actions
+}
+
+/// Identity 1 makes identity 2 a reader of the document captured as `doc`,
+/// a relationship that did not exist yet.
+fn identity_two_made_reader(doc: &str) -> Actions {
+    AddDACActorRelationship {
+        target_identity_seed: Some(2),
+        collection: "Users".into(),
+        doc_id: Text::reference(doc),
+        relation: "reader".into(),
+        expected_data: json!({ "existedAlready": false }),
+        common: as_identity(1),
+        ..Default::default()
+    }
+    .into()
 }
 
 fn run(id: &'static str, actions: Vec<Actions>) {
@@ -297,32 +303,51 @@ fn purge_without_a_handler_is_refused() {
     );
 }
 
+/// A node built by `node` refuses the purge for want of development mode and
+/// keeps its collection.
+fn refused_without_development_mode(node: NewNode) -> Vec<Actions> {
+    vec![
+        node.into(),
+        users_collection(),
+        Purge {
+            expected_error: Some(
+                "operation not permitted whilst development mode is disabled. Operation: Purge"
+                    .into(),
+            ),
+            ..Default::default()
+        }
+        .into(),
+        GetCollections {
+            expected_data: json!({ "collections": m::length(1) }),
+            ..Default::default()
+        }
+        .into(),
+    ]
+}
+
 #[test]
 #[mantra_macros::req_test("defra.store_purge.dev_mode")]
 fn purge_is_refused_without_development_mode() {
+    // An embedded node with a purge handler: `Node::purge_as` in process,
+    // the route over HTTP and through the CLI.
     run(
         integration_test::scenario_id!(),
-        vec![
-            NewNode {
-                process: Some(ProcessBinary::Rust),
-                ..Default::default()
-            }
-            .into(),
-            users_collection(),
-            Purge {
-                expected_error: Some(
-                    "operation not permitted whilst development mode is disabled. Operation: Purge"
-                        .into(),
-                ),
-                ..Default::default()
-            }
-            .into(),
-            GetCollections {
-                expected_data: json!({ "collections": m::length(1) }),
-                ..Default::default()
-            }
-            .into(),
-        ],
+        refused_without_development_mode(NewNode {
+            development: Some(false),
+            ..Default::default()
+        }),
+    );
+}
+
+#[test]
+#[mantra_macros::req_test("defra.store_purge.dev_mode")]
+fn defradb_start_refuses_the_purge_without_development_mode() {
+    run(
+        integration_test::scenario_id!(),
+        refused_without_development_mode(NewNode {
+            process: Some(ProcessBinary::Rust),
+            ..Default::default()
+        }),
     );
 }
 
@@ -349,7 +374,17 @@ fn purge_removes_the_embedded_vera_state() {
             process: Some(ProcessBinary::Rust),
             development: Some(true),
             keyring: true,
-            start_args: vec!["--document-acp-type".into(), "verars-embedded".into()],
+            // An embedded Vera node needs a node identity and a deployment.
+            // It submits ACP changes only as an identity it holds the key
+            // of, so the node identity is identity 1, the documents' owner.
+            start_args: vec![
+                "--document-acp-type".into(),
+                "verars-embedded".into(),
+                "--identity".into(),
+                integration_test::scenario::identity::private_key_hex(1),
+                "--vera-deployment-id".into(),
+                "9407".into(),
+            ],
             ..Default::default()
         }),
     );

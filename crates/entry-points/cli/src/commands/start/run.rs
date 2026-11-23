@@ -340,12 +340,6 @@ impl Node {
 
         defra_core::signing::clear_identity_store();
         info!("DefraDB node shutdown complete");
-        if !self.purge.requested() {
-            return Ok(RunOutcome::Stopped);
-        }
-        match teardown_failure {
-            Some(reason) => Err(Error::PurgeTeardown(reason)),
-            None => Ok(RunOutcome::Purged(Box::new(self.wipe_target.clone()))),
-        }
+        super::purge::outcome(self.purge.requested(), teardown_failure, &self.wipe_target)
     }
 }

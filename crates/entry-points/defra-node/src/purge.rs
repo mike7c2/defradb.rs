@@ -25,24 +25,26 @@ pub trait PurgeHandler: Send + Sync {
 /// Records the first accepted purge and hands it to the handler once.
 pub(crate) struct PurgeGate {
     handler: Option<Arc<dyn PurgeHandler>>,
+    development: bool,
     requested: AtomicBool,
 }
 
 impl PurgeGate {
-    pub(crate) fn new(handler: Option<Arc<dyn PurgeHandler>>) -> Arc<Self> {
+    pub(crate) fn new(handler: Option<Arc<dyn PurgeHandler>>, development: bool) -> Arc<Self> {
         Arc::new(Self {
             handler,
+            development,
             requested: AtomicBool::new(false),
         })
     }
 
-    pub(crate) fn has_handler(&self) -> bool {
-        self.handler.is_some()
-    }
-
-    /// Accepts a purge. Only the first one reaches the handler; a repeat is
-    /// accepted and changes nothing.
+    /// Accepts a purge, as Go's `PurgeAndRestart` only in development mode,
+    /// and only with a handler to restart the node. Only the first one
+    /// reaches the handler; a repeat is accepted and changes nothing.
     pub(crate) fn request(&self) -> Result<()> {
+        if !self.development {
+            return Err(Error::PurgeNeedsDevelopment);
+        }
         let handler = self.handler.as_ref().ok_or(Error::PurgeNeedsHandler)?;
         if !self.requested.swap(true, Ordering::SeqCst) {
             handler.purge_requested();
@@ -53,20 +55,21 @@ impl PurgeGate {
 
 #[cfg(feature = "http")]
 impl defra_http::PurgeOperations for PurgeGate {
-    fn request_purge(&self) -> std::result::Result<(), String> {
-        self.request().map_err(|error| error.to_string())
+    fn request_purge(&self) -> std::result::Result<(), defra_http::PurgeRefusal> {
+        self.request().map_err(|error| match error {
+            Error::PurgeNeedsDevelopment => defra_http::PurgeRefusal::DevelopmentMode,
+            _ => defra_http::PurgeRefusal::NoHandler,
+        })
     }
 }
 
 impl Node {
     /// Asks for a purge as `context`: the node's store is wiped and the
-    /// application restarts the node. Needs `DocumentUpdate` under node ACP
-    /// and a [`PurgeHandler`] (`NodeBuilder::with_purge_handler`); answered
-    /// before anything is wiped.
+    /// application restarts the node. Checked in the HTTP route's order:
+    /// `DocumentUpdate` under node ACP, then development mode
+    /// (`NodeBuilder::with_development`), then a [`PurgeHandler`]
+    /// (`NodeBuilder::with_purge_handler`); answered before anything is wiped.
     pub async fn purge_as(&self, context: &RequestContext) -> Result<()> {
-        if !self.purge.has_handler() {
-            return Err(Error::PurgeNeedsHandler);
-        }
         let (database, context) = (self.database.clone(), self.caller(context));
         self.on_pool(move || async move {
             database

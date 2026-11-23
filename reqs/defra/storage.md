@@ -128,7 +128,7 @@ A DocID that names no document is not an error and is not counted: purging `[ali
 
 - **Parents:** ["defra"]
 
-`POST /api/v0/purge` (and `client purge --force`) deletes everything the node keeps in its store and starts the node again with the same options, as Go's `PurgeAndRestart` does. The request is answered `200` at once; the node then stops, its store is wiped, and it starts again. In Rust the process that embeds the node does the restart, so the node only asks for it through a purge handler (`NodeBuilder::with_purge_handler`, or `Node::purge_as` in process); `defradb start` is one such process. The route is mounted with collection management, as before, and is checked against the `DocumentUpdate` node permission when node access control is on. One purge runs per start of the node: a second request while the first is under way is answered `200` and starts nothing more. Purge by DocID (`defra.purge`) is a different operation with its own requirements.
+`POST /api/v0/purge` (and `client purge --force`) deletes everything the node keeps in its store and starts the node again with the same options, as Go's `PurgeAndRestart` does. The request is answered `200` at once; the node then stops, its store is wiped, and it starts again. In Rust the process that embeds the node does the restart, so the node only asks for it through a purge handler (`NodeBuilder::with_purge_handler`, or `Node::purge_as` in process); `defradb start` is one such process. The route and `Node::purge_as` check in one order: the `DocumentUpdate` node permission when node access control is on, then development mode (`defra.store_purge.dev_mode`), then, for the route only, collection management (without it the route answers `503` with `Collection management operations are not enabled.`, as before), then a purge handler (`defra.store_purge.no_handler`). One purge runs per start of the node: a second request while the first is under way is answered `200` and starts nothing more. Purge by DocID (`defra.purge`) is a different operation with its own requirements.
 
 # `defra.store_purge.wipes`: After a purge nothing of the old store is left
 
@@ -175,9 +175,9 @@ An embedded node serving HTTP with collection management and development mode on
 # `defra.store_purge.dev_mode`: A purge needs development mode
 
 - **Parents:** ["defra.store_purge"]
-- **Scenarios:** ["node::purge::purge_is_refused_without_development_mode"]
+- **Scenarios:** ["node::purge::purge_is_refused_without_development_mode", "node::purge::defradb_start_refuses_the_purge_without_development_mode"]
 
-Without development mode `POST /api/v0/purge` answers `403` with `operation not permitted whilst development mode is disabled. Operation: Purge`, Go's text, and the node keeps all its data.
+Without development mode `POST /api/v0/purge` answers `403` with `operation not permitted whilst development mode is disabled. Operation: Purge`, Go's text, and the node keeps all its data. This holds however the purge is asked for, as Go checks it in `PurgeAndRestart` itself: `defradb start` without `--development`, and an embedded node built without `NodeBuilder::with_development` (or an HTTP config's `with_dev_mode`), whether through the route, the CLI client or `Node::purge_as` in process.
 
 # `defra.store_purge.embedded_vera`: A purge resets the embedded Vera node's state
 

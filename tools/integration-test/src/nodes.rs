@@ -73,7 +73,7 @@ pub struct NodeSpec {
     pub process: Option<ProcessBinary>,
     /// A Rust node built without a purge handler.
     pub no_purge_handler: bool,
-    /// Development mode; unset, a Rust node's HTTP server has it and a
+    /// Development mode; unset, an in-process Rust node has it and a
     /// process node does not.
     pub development: Option<bool>,
     /// A process node keeps its keyring on, so its peer key lives there.
@@ -455,6 +455,7 @@ fn build(spec: &NodeSpec, listen: &str, http: Option<HttpConfig>) -> Result<Node
     if !spec.no_purge_handler {
         builder = builder.with_purge_handler(Arc::new(TestPurgeHandler));
     }
+    builder = builder.with_development(spec.development.unwrap_or(true));
     let node = workers::block_on(builder.build())
         .expect("run builder")
         .map_err(|error| error.to_string())?;
