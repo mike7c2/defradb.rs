@@ -50,11 +50,14 @@ impl Planner {
         let parent_relation_filter_for_child = &child.parent_relation_filter_for_child;
 
         let mut join_provides_ordering: Option<bool> = None;
-        // An index picked for the filter may not order by the sort field, and
-        // the selection's own order would rank the index ahead of the parent's.
-        let index_orders_parent = parent_order_for_child.is_some()
-            && child.child_scan_provides_order
-            && nested_select.order_by.is_none();
+        // The child scan orders by the first condition only, so later ones still need a sort.
+        // The selection's own order would also rank the index ahead of the parent's.
+        let join_orders_parent = child.child_scan_orders_parent
+            && nested_select.order_by.is_none()
+            && select
+                .order_by
+                .as_ref()
+                .is_some_and(|order| order.conditions.len() == 1);
 
         // Find the other side of the relation
         let target_relation_field = if let Some(rel_name) = &relation_field.relation_name {
@@ -265,10 +268,10 @@ impl Planner {
                         .map(|c| c.direction)
                         .unwrap_or(OrderDirection::Asc);
                     let join = join.with_orphan_config(orphan, direction, shared_ids, child_has_fk);
-                    join_provides_ordering = Some(index_orders_parent);
+                    join_provides_ordering = Some(join_orders_parent);
                     Box::new(join)
                 } else {
-                    join_provides_ordering = Some(index_orders_parent);
+                    join_provides_ordering = Some(join_orders_parent);
                     Box::new(join)
                 }
             } else {
@@ -345,10 +348,10 @@ impl Planner {
                         let shared_ids = crate::plan::new_shared_yielded_ids();
                         let join =
                             join.with_orphan_config(orphan, direction, shared_ids, child_has_fk);
-                        join_provides_ordering = Some(index_orders_parent);
+                        join_provides_ordering = Some(join_orders_parent);
                         Box::new(join)
                     } else {
-                        join_provides_ordering = Some(index_orders_parent);
+                        join_provides_ordering = Some(join_orders_parent);
                         Box::new(join)
                     }
                 } else {
