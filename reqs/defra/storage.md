@@ -36,6 +36,13 @@ A counter field can be indexed. After local increments, or after two nodes incre
 
 An ordered query over an indexed field with `limit: 3, offset: 2` reads `limit + offset` index entries, returns exactly the page after skipping two, and leaves the query offset to the limit node so it is not applied twice. The same paging is correct when the ordered field is not indexed.
 
+# `defra.index.json_descending_path`: A descending JSON index keeps its paths ascending
+
+- **Parents:** ["defra.index"]
+- **Scenarios:** ["index::json_descending_array::any_on_a_top_level_array", "index::json_descending_array::any_range_on_a_top_level_array", "index::json_descending_array::any_on_an_array_under_a_property", "index::json_descending_array::any_on_an_array_under_a_nested_path", "index::json_descending_array::a_scan_of_every_entry_reads_each_path"]
+
+On a JSON index with `direction: DESC`, each key holds its path in ascending bytes and only the value inverted, as Go's `EncodeJSONDescending` writes it. `_any` on a top-level or nested array, a range on its elements, and a scan of every entry return the matching documents instead of failing with `invalid escape sequence in descending path` (issue #3143). Each property step starts with the bytes marker, as in Go, so no property step reads as an array step. Opening a store written with the older layout rebuilds its indexes.
+
 # `defra.collection`: Collection-wide operations
 
 - **Parents:** ["defra"]

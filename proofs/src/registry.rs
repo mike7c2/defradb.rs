@@ -2744,6 +2744,18 @@ pub const PROPERTIES: &[Property] = &[
         bound_by: "",
     },
     Property {
+        // The encoders are exercised by the unit tests in
+        // crates/engine/storage/src/encoding/json.rs and by
+        // tools/integration-test/tests/testo/index/json_descending_array.rs.
+        family: "Order-preserving key encoding",
+        name: "decodePath_encodePath / encodePath_injective / desc_key_order / sentinels_bound_the_path / child_key_above_pathMax: a JSON key's ascending path reads back as itself, a descending index inverts only the value, and the path bounds hold exactly the path's values",
+        axis: Lean,
+        anchor: "crates/engine/storage/src/encoding/json.rs encode_json, encode_path, decode_path; crates/engine/query/src/planner/index_selection/filter_to_scan.rs path_low_end, path_high_end",
+        model_ref: "OrderEncoding.JsonPath (lake build)",
+        tiers: &[Boundary],
+        bound_by: "",
+    },
+    Property {
         // `sort_in_key_order` is private to the planner, so no contract test
         // reaches it; crates/entry-points/defra-node/tests/in_filter_order.rs runs the
         // queries it orders over an ASC, a DESC and no index. Boundary.

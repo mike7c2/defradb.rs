@@ -4,6 +4,7 @@ import OrderEncoding.PerType
 import OrderEncoding.BytesEnc
 import OrderEncoding.CrossType
 import OrderEncoding.InLookup
+import OrderEncoding.JsonPath
 
 /-!
 # OrderEncoding_DESIGN — order-preserving key-encoding monotonicity (Lean slice)
@@ -246,3 +247,9 @@ from the byte-emitting definitions. -/
 #print axioms OrderEncoding.cross_type_empty_array
 #print axioms OrderEncoding.empty_array_desc_not_flipped
 #print axioms OrderEncoding.neg_flipped_fe_is_nan
+#print axioms OrderEncoding.JsonPath.decodePath_encodePath
+#print axioms OrderEncoding.JsonPath.encodePath_injective
+#print axioms OrderEncoding.JsonPath.desc_key_order
+#print axioms OrderEncoding.JsonPath.sentinels_bound_the_path
+#print axioms OrderEncoding.JsonPath.child_key_above_pathMax
+#print axioms OrderEncoding.JsonPath.neg_untagged_paths_collide

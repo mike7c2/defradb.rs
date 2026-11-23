@@ -424,7 +424,7 @@ pub fn filter_to_index_scan(
                 // For empty paths (top-level JSON), leave unbounded to match Go behavior:
                 // Go scans from value to end of entire index, counting all keys.
                 match &range_json_path {
-                    Some(path) if !path.is_empty() => path_low_end(path, first_field_descending),
+                    Some(path) if !path.is_empty() => path_low_end(path),
                     _ => Bound::Unbounded,
                 }
             }
@@ -438,7 +438,7 @@ pub fn filter_to_index_scan(
                 Bound::Exclusive(wrap_value_for_json_path(v, range_json_path.as_ref()))
             }
             Bound::Unbounded => match &range_json_path {
-                Some(path) if !path.is_empty() => path_high_end(path, first_field_descending),
+                Some(path) if !path.is_empty() => path_high_end(path),
                 _ => Bound::Unbounded,
             },
             _ => Bound::Unbounded,
@@ -457,8 +457,8 @@ pub fn filter_to_index_scan(
             if !path.is_empty() {
                 IndexScanType::RangeScan {
                     prefix_values: vec![],
-                    lower: path_low_end(path, first_field_descending),
-                    upper: path_high_end(path, first_field_descending),
+                    lower: path_low_end(path),
+                    upper: path_high_end(path),
                     reverse,
                 }
             } else {
@@ -575,34 +575,21 @@ pub fn or_filter_to_index_scan(
     None
 }
 
-/// A bound below every value at `path`. A descending index inverts the
-/// bytes, so `PathMax` is its low end.
-fn path_low_end(path: &JsonPath, descending: bool) -> Bound {
-    let sentinel = if descending {
-        JsonScalarValue::PathMax
-    } else {
-        JsonScalarValue::PathMin
-    };
+/// A bound below every value at `path`, in either direction: the path is
+/// always ascending.
+fn path_low_end(path: &JsonPath) -> Bound {
     Bound::Inclusive(NormalValue::JsonLeaf(JsonLeafValue::new(
         path.clone(),
-        sentinel,
+        JsonScalarValue::PathMin,
     )))
 }
 
-/// A bound above every value at `path`. On a descending index `PathMin` is a
-/// null, the last value, so it stays inclusive.
-fn path_high_end(path: &JsonPath, descending: bool) -> Bound {
-    if descending {
-        Bound::Inclusive(NormalValue::JsonLeaf(JsonLeafValue::new(
-            path.clone(),
-            JsonScalarValue::PathMin,
-        )))
-    } else {
-        Bound::Exclusive(NormalValue::JsonLeaf(JsonLeafValue::new(
-            path.clone(),
-            JsonScalarValue::PathMax,
-        )))
-    }
+/// A bound above every value at `path`, in either direction.
+fn path_high_end(path: &JsonPath) -> Bound {
+    Bound::Exclusive(NormalValue::JsonLeaf(JsonLeafValue::new(
+        path.clone(),
+        JsonScalarValue::PathMax,
+    )))
 }
 
 /// `values` in the order the index holds their keys (`descending` when its
