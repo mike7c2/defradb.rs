@@ -252,4 +252,5 @@ from the byte-emitting definitions. -/
 #print axioms OrderEncoding.JsonPath.desc_key_order
 #print axioms OrderEncoding.JsonPath.sentinels_bound_the_path
 #print axioms OrderEncoding.JsonPath.child_key_above_pathMax
-#print axioms OrderEncoding.JsonPath.neg_untagged_paths_collide
+#print axioms OrderEncoding.JsonPath.neg_old_desc_paths_collide
+#print axioms OrderEncoding.JsonPath.tagged_paths_split_at_first_step

@@ -24,8 +24,10 @@ What must never happen:
   a longer path (`sentinels_bound_the_path`).
 
 Each step now starts with a byte of its own: a property with the bytes marker 6,
-as Go writes it, and an array step with 136. Without that byte two different
-paths can give the very same bytes (`neg_untagged_paths_collide`).
+as Go writes it, and an array step with 136. The old descending layout had no
+such byte, and the paths `[0].x` and `wx` gave the very same bytes
+(`neg_old_desc_paths_collide`); now they differ at their first step
+(`tagged_paths_split_at_first_step`).
 
 Rust anchors (`crates/engine/storage/src/encoding/json.rs`):
 - `encode_json`, `encode_path`: the path is written ascending in both directions;
@@ -312,29 +314,42 @@ theorem child_key_above_pathMax (path more : List Part) (step : Part) (value : B
   simp only [pathMax.encPathOpen, hb, List.cons_append]
   exact Lex.head hlt
 
--- The layout before this change: a property written without the bytes marker.
-def encPartUntagged : Part → Bytes
-  -- the escaped name alone
-  | .prop name => encBytesBody name
-  -- the array byte, as now
+-- The descending layout before this change: a property's escaped bytes, each
+-- flipped, with no bytes marker in front.
+def encPartOldDesc : Part → Bytes
+  -- every byte of the escaped name and its terminator, flipped
+  | .prop name => (encBytesBody name).map (fun b => 255 - b)
+  -- a descending 0 is the byte 136, which nothing flips
   | .index => [mIndex]
 
--- A whole path in that layout.
-def encPathUntagged : List Part → Bytes
-  -- the two end bytes, as now
-  | [] => [mTerm, mPathEnd]
-  -- each step in turn
-  | p :: ps => encPartUntagged p ++ encPathUntagged ps
+-- A whole path in that layout: each step in turn, then the two end bytes flipped.
+def encPathOldDesc : List Part → Bytes
+  -- the flipped terminator and path end
+  | [] => [255 - mTerm, 255 - mPathEnd]
+  -- a step, then the rest of the path
+  | p :: ps => encPartOldDesc p ++ encPathOldDesc ps
 
-/-- RED: without the bytes marker, the path "array step, then property `5`" and
-    the path "property `136 5`" are written as the very same bytes, so the reader
-    cannot tell them apart. -/
-theorem neg_untagged_paths_collide :
-    -- two different paths
-    ([Part.index, Part.prop [5]] ≠ [Part.prop [136, 5]])
-    -- with the same bytes
-    ∧ encPathUntagged [Part.index, Part.prop [5]] = encPathUntagged [Part.prop [136, 5]] := by
+/-- RED: in the old descending layout, the path "array step, then `x`" and the
+    path "`wx`" are the very same bytes, `136 135 255 254 254 208`, so the reader
+    cannot tell them apart. Both names are plain letters a document can hold. -/
+theorem neg_old_desc_paths_collide :
+    -- two different paths: `[0].x` and `wx`
+    ([Part.index, Part.prop [120]] ≠ [Part.prop [119, 120]])
+    -- with the same bytes, since a flipped `w` is the array byte 136
+    ∧ encPathOldDesc [Part.index, Part.prop [120]] = encPathOldDesc [Part.prop [119, 120]] := by
   -- both sides are literal; Lean computes them
+  decide
+
+/-- The same two paths now differ at their first byte: the array step's 136
+    against the bytes marker 6 a property starts with. -/
+theorem tagged_paths_split_at_first_step :
+    -- `[0].x` starts with the array byte
+    (encPath [Part.index, Part.prop [120]]).head? = some mIndex
+    -- `wx` starts with the bytes marker
+    ∧ (encPath [Part.prop [119, 120]]).head? = some mBytes
+    -- and the two are different bytes
+    ∧ mIndex ≠ mBytes := by
+  -- all literal; Lean computes them
   decide
 
 end JsonPath
