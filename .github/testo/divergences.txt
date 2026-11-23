@@ -13,3 +13,13 @@ testo collection_version::updates::add::simple::collection_version_updates_add_s
 # Defra.rs should return an error for a view source query with more than one top-level selection; Go silently keeps the first selection
 # and creates the view (undesirable).
 testo view::simple::with_multiple_sources::add_view_with_two_source_selections_fails_and_creates_no_view
+# Go's array index has no entry for an empty array, so `_all` misses it; Rust finds it, as without the index.
+testo index::empty_array::a_unique_array_index_holds_two_empty_arrays
+testo index::empty_array::all_on_a_nested_json_array_finds_the_empty_array
+testo index::empty_array::all_on_a_typed_array_finds_the_empty_array
+testo index::empty_array::an_update_moves_the_empty_array_entry
+testo index::empty_array::other_filters_on_a_top_level_json_array_skip_the_empty_array
+# Go has no `_ne` inside `_any`; Rust accepts it.
+testo index::empty_array::other_filters_on_a_typed_array_skip_the_empty_array
+# Go refuses `_ne` on a JSON field; Rust accepts it.
+testo index::json_descending_array::a_scan_of_every_entry_reads_each_path
