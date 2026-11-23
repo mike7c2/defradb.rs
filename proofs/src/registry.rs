@@ -2960,6 +2960,17 @@ pub const PROPERTIES: &[Property] = &[
         bound_by: "crates/database/db/tests/index/merged_crdt.rs",
     },
     Property {
+        // A format rebuild takes over a reindex already owed, so progress an
+        // older build saved must not let the walk skip its old-format entries.
+        family: "Index-maintenance consistency",
+        name: "INV_OpenReadable — an open node's index holds one entry per document, in the format it reads",
+        axis: Tla,
+        anchor: "crates/database/db/src/definition/migration/format.rs DB::migrate_index_format; crates/database/db/src/definition/migration/reindex/mod.rs DB::reindex_in_pages; crates/database/db/src/definition/migration/reindex/progress.rs read",
+        model_ref: "MC_IndexFormatResume_{Green,Red_NoFormatReset}.cfg",
+        tiers: &[Boundary],
+        bound_by: "crates/database/db/tests/definition/format.rs",
+    },
+    Property {
         // Every write that owes a deferred index asks for its drain; the
         // drain task keeps a failed index for the sweep, and the sweep runs
         // on a fixed deadline that requests cannot push back.

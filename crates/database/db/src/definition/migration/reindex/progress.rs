@@ -3,10 +3,13 @@
 //! token belongs to a reindex a later schema change superseded, so it reads as
 //! the start. So does one written while other indexes were deferred: the
 //! pages so far kept them the other way (`proofs/tla/DeferredIndexMode.tla`).
+//! So does one an older build wrote: its walked pages hold keys in the old
+//! format (`proofs/tla/IndexFormatResume.tla`).
 
 use datastore::NamespaceView;
 use serde::{Deserialize, Serialize};
 
+use crate::definition::migration::format::CURRENT_INDEX_FORMAT;
 use crate::error::{Error, Result};
 
 /// Start of every reindex progress key in the system store; the collection ID
@@ -45,6 +48,9 @@ struct Progress {
     /// The IDs of the indexes the pages so far kept deferred, in order.
     #[serde(default)]
     deferred: Vec<u32>,
+    /// The index key format the pages so far wrote; none before it was recorded.
+    #[serde(default)]
+    format: u32,
 }
 
 fn progress_key(collection_id: &str) -> Vec<u8> {
@@ -69,7 +75,10 @@ pub(super) async fn read(
     let progress: Progress = serde_json::from_slice(&bytes)
         .map_err(|error| Error::Other(format!("invalid reindex progress record: {error}")))?;
     Ok(
-        if progress.token == token && progress.deferred == deferred {
+        if progress.token == token
+            && progress.deferred == deferred
+            && progress.format == CURRENT_INDEX_FORMAT
+        {
             progress.stage
         } else {
             Stage::start()
@@ -90,6 +99,7 @@ pub(super) async fn write(
         token,
         stage,
         deferred: deferred.to_vec(),
+        format: CURRENT_INDEX_FORMAT,
     })
     .map_err(|error| Error::Other(format!("failed to encode reindex progress: {error}")))?;
     systemstore

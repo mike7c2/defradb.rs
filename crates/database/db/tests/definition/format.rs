@@ -270,3 +270,123 @@ fn a_format_three_store_rebuilds_json_and_empty_array_entries() {
     })
     .unwrap();
 }
+
+/// A format-3 build that stopped a full reindex after a walk page left that
+/// page's documents in format-3 keys. The format-4 open must not resume past them.
+#[test]
+fn a_format_three_walk_page_is_not_resumed() {
+    use std::sync::Arc;
+
+    use db::definition::migration::format::INDEX_FORMAT_KEY;
+    use db::{AutoCommitMutator, LensedAutoCommitFetcher, DB};
+    use document::{Document, JsonLeafValue, JsonPath, JsonScalarValue, NormalValue};
+    use query::mutator::DocMutator;
+    use query::{QueryExecutor, QueryRequest, QueryRunner};
+    use storage::corekv::{IterOptions, Iterator as _};
+    use storage::keys::IndexDataStoreKey;
+
+    let request = "query { User(filter: {up: {height: {_gt: 170}}}) { name } }";
+    let expected = serde_json::json!({"User": [{"name": "John"}]});
+
+    workers::block_on(async {
+        let store = RegolithStore::in_memory().unwrap();
+        let db = Arc::new(DB::open(store.clone()).await.unwrap());
+        db.add_collection(
+            &defra_core::RequestContext::ambient(),
+            "type User { name: String, up: JSON @index }",
+        )
+        .await
+        .unwrap();
+        let collection = db.require_collection("User").unwrap();
+        let schema = collection.schema_arc();
+        let document =
+            Document::from_json_str(r#"{"name":"John","up":{"height":180}}"#, schema.clone())
+                .unwrap();
+        AutoCommitMutator::new(db.clone())
+            .create("User", document)
+            .await
+            .unwrap();
+
+        let current = storage::field_value::encode_field_value(
+            Vec::new(),
+            &NormalValue::JsonLeaf(JsonLeafValue::new(
+                JsonPath::new().append_property("height"),
+                JsonScalarValue::Number(180.0),
+            )),
+            false,
+        )
+        .unwrap();
+        let txn = db.new_txn(false).await.unwrap();
+        let datastore = txn.datastore().unwrap();
+        let prefix =
+            IndexDataStoreKey::index_prefix(collection.resolved_root_id(), schema.indexes[0].id);
+        let mut iter = datastore
+            .iterator(IterOptions::new().with_prefix(prefix.clone()))
+            .await
+            .unwrap();
+        let mut pairs = Vec::new();
+        while let Some(pair) = iter.next().await.unwrap() {
+            pairs.push((pair.key.to_vec(), pair.value.to_vec()));
+        }
+        iter.close().await.unwrap();
+        drop(iter);
+        assert_eq!(pairs.len(), 1, "John has one entry");
+        let (key, value) = &pairs[0];
+        let suffix = key[prefix.len()..]
+            .strip_prefix(current.as_slice())
+            .unwrap();
+        let old_key = [prefix.as_slice(), &format_three_json_leaf(false), suffix].concat();
+        datastore.delete(key).await.unwrap();
+        datastore.set(&old_key, value).await.unwrap();
+        drop(datastore);
+
+        // What the format-3 build left: a reindex owed and walked past John.
+        let systemstore = txn.systemstore().unwrap();
+        let collection_id = collection.collection_id();
+        systemstore
+            .set(
+                format!("/reindex/owed/{collection_id}").as_bytes(),
+                br#"{"token":7,"migration_destination":null}"#,
+            )
+            .await
+            .unwrap();
+        systemstore
+            .set(
+                format!("/reindex/progress/{collection_id}").as_bytes(),
+                br#"{"token":7,"stage":{"Walk":{"fence":1000000,"last":1000000}},"deferred":[]}"#,
+            )
+            .await
+            .unwrap();
+        systemstore
+            .set(INDEX_FORMAT_KEY, &3u32.to_be_bytes())
+            .await
+            .unwrap();
+        drop(systemstore);
+        txn.commit().await.unwrap();
+        drop(db);
+
+        let reopened = Arc::new(DB::open(store).await.unwrap());
+        let schema = reopened
+            .require_collection("User")
+            .unwrap()
+            .schema()
+            .clone();
+        let result = QueryRunner::new(LensedAutoCommitFetcher::new(reopened.clone()), vec![schema])
+            .execute(QueryRequest::new(request))
+            .await;
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.data.as_ref(), Some(&expected));
+        let txn = reopened.new_txn(true).await.unwrap();
+        assert!(
+            txn.datastore()
+                .unwrap()
+                .get(&old_key)
+                .await
+                .unwrap()
+                .is_none(),
+            "the rebuild removes the format-3 entry"
+        );
+        txn.discard().unwrap();
+    })
+    .unwrap();
+}
