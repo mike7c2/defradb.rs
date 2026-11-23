@@ -45,6 +45,7 @@ section is the **diff**: what is proven vs. the accepted gap.
 | Multi-instance claim | TLA+ | gents |
 | Block integrity / signatures | TLA+ | db-merge, defra-core, blockstore |
 | KMS key distribution | TLA+ / Lean | kms, db, db-merge |
+| Encryption policy | TLA+ / Lean | db |
 | Node identity and signing | Lean | defra-node, http |
 | Encrypted LWW restart/replay | TLA+ + existing LWW Lean law | kms, p2p, db-merge, crdt |
 | Management-channel auth (NAC gate) | TLA+ | http, db-nac, pg-compat |

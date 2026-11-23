@@ -1891,6 +1891,33 @@ pub const PROPERTIES: &[Property] = &[
         bound_by: "tools/integration-test/tests/testo/encryption/field_commit.rs doc_encryption_field_with_doc_and_field_encryption_should_use_dedicated_enc_key_for_individual_fields",
     },
     Property {
+        // #2742: each field follows its own heads, a headless field takes the
+        // document key only on a wholly encrypted document, the builder takes
+        // the preparation's decision, and no composite links encryption. The
+        // premise is not monotone (remote plaintext merges); a stale decision
+        // serializes before the concurrent merge.
+        family: "Encryption policy",
+        name: "INV_FollowsOwnHeads / INV_NoDowngradeOfEncryptedField / INV_HeadlessAllEncrypted / INV_StaleDecisionSerializable / INV_PreparedKeyCovers / INV_CompositeUnlinked",
+        axis: Tla,
+        anchor: "crates/database/db/src/block/builder/write.rs field_encryption_source, every_field_encrypted, doc_scope_fields, build_document_blocks, write_delete_block_with_inputs; crates/database/db/src/block/builder/compute.rs compute_document_blocks; crates/database/db/src/write/prepare.rs prepare_keys_with_stores",
+        model_ref: "MC_EncryptionPolicyInheritance_{Green,Green_Local,Red_*}.cfg",
+        tiers: &[Boundary],
+        bound_by: "",
+    },
+    Property {
+        // #2742: a field with heads gets Go's answer; a headless field gets the
+        // document key iff the document is non-empty and wholly encrypted;
+        // plaintext heads are never encrypted without config; the composite is
+        // never linked.
+        family: "Encryption policy",
+        name: "EncryptionPolicy.with_heads_matches_go / headless_doc_scope_iff / unlisted_plaintext_heads_stay_plaintext / composite_unlinked",
+        axis: Lean,
+        anchor: "crates/database/db/src/block/builder/write.rs field_encryption_source, every_field_encrypted",
+        model_ref: "EncryptionPolicy (lake build)",
+        tiers: &[Behavioral],
+        bound_by: "tools/integration-test/tests/testo/encryption/new_field.rs doc_encryption_field_level_update_keeps_unlisted_field_plaintext; tools/integration-test/tests/testo/encryption/doc_id.rs doc_encryption_doc_id_matches_go",
+    },
+    Property {
         // Encryption reuses PriorityReconcile.lwwCM unchanged: ciphertext and
         // key timing affect when a value can materialize, not which value wins.
         // The behavioral legs preserve encrypted fields selected for filtered

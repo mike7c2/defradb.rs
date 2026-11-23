@@ -541,6 +541,16 @@ RUNS=(
   "MC_EncryptedIndexAutocommit_Green.cfg EncryptedIndexAutocommit.tla GREEN" # #2755: an encrypted index add or delete outside a txn reads the definition in its txn and re-runs on a conflict
   "MC_EncryptedIndexAutocommit_Red_CacheRead.cfg EncryptedIndexAutocommit.tla RED" # decides from the cache and blind-writes: a concurrent add is lost (INV_NoLostIndex)
   "MC_EncryptedIndexAutocommit_Red_SingleAttempt.cfg EncryptedIndexAutocommit.tla RED" # one attempt: a valid add is refused with the conflict (INV_NoValidRefused)
+  "MC_EncryptionPolicyInheritance_Green.cfg EncryptionPolicyInheritance.tla GREEN" # #2742: each field follows its own heads; a headless field takes the doc key only on a wholly encrypted doc; the composite links nothing
+  "MC_EncryptionPolicyInheritance_Green_Local.cfg EncryptionPolicyInheritance.tla GREEN" # local writes alone keep "every field encrypted" true once it is (PROP_EncryptedMonotone)
+  "MC_EncryptionPolicyInheritance_Red_CompositeLink.cfg EncryptionPolicyInheritance.tla RED" # the composite keeps an encryption link (INV_CompositeUnlinked)
+  "MC_EncryptionPolicyInheritance_Red_AnyField.cfg EncryptionPolicyInheritance.tla RED" # rule (c) on any encrypted field instead of every field (INV_HeadlessAllEncrypted)
+  "MC_EncryptionPolicyInheritance_Red_PlainHeadedDocKey.cfg EncryptionPolicyInheritance.tla RED" # a plaintext-headed field takes the doc key (INV_FollowsOwnHeads)
+  "MC_EncryptionPolicyInheritance_Red_PlainHeadWins.cfg EncryptionPolicyInheritance.tla RED" # a plaintext head beside an encrypted one downgrades the field (INV_NoDowngradeOfEncryptedField)
+  "MC_EncryptionPolicyInheritance_Red_Vacuous.cfg EncryptionPolicyInheritance.tla RED" # the empty doc counts as wholly encrypted (INV_HeadlessAllEncrypted)
+  "MC_EncryptionPolicyInheritance_Red_Monotone.cfg EncryptionPolicyInheritance.tla RED" # the false premise: a remote plaintext merge breaks "every field encrypted" (PROP_EncryptedMonotone)
+  "MC_EncryptionPolicyInheritance_Red_UnpreparedDecision.cfg EncryptionPolicyInheritance.tla RED" # the builder re-decides rule (c) and needs an unminted key (INV_PreparedKeyCovers)
+  "MC_EncryptionPolicyInheritance_Red_TornSnapshot.cfg EncryptionPolicyInheritance.tla RED" # heads read field by field at two times (INV_StaleDecisionSerializable)
   "MC_Truncate_Green.cfg Truncate.tla GREEN" # #2321: truncate checks nac and chunk, then for a filter branchable, txn and shape, before a delete that is durable at once and empties a view's cache
   "MC_Truncate_Red_Chunk.cfg Truncate.tla RED" # chunk check left out: a truncate empties a chunk collection its parents still list (INV_NoRemovalFromChunks)
   "MC_Truncate_Red_Nac.cfg Truncate.tla RED" # permission check left out: a caller without CollectionTruncate removes documents (INV_NoRemovalWithoutPermission)
