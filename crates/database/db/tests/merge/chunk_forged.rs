@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use blockstore::{Blockstore as _, DefraBlockstore};
-use db::chunk::list::text_hash;
+use db::chunk::hash::text_hash;
 use db::collection::Collection;
 use db::database::DB;
 use db::merge::merge_handler::{DbMergeHandler, MergeError};
@@ -121,17 +121,14 @@ async fn stored(node: &Node, collection: &Collection, doc_id: &DocID) -> Option<
     doc
 }
 
-pub(super) async fn list_of(node: &Node, parent: &DocID) -> Vec<String> {
+pub(super) async fn body_of(node: &Node, parent: &DocID) -> Option<String> {
     let parents = node.db.get_collection("Article").unwrap().unwrap();
-    match stored(node, &parents, parent)
+    stored(node, &parents, parent)
         .await
         .unwrap()
-        .get("_body_chunks")
-    {
-        Some(NormalValue::StringArray(list)) => list.clone(),
-        Some(NormalValue::NillableStringArray(Some(list))) => list.clone(),
-        _ => Vec::new(),
-    }
+        .get("body")
+        .and_then(NormalValue::as_str)
+        .map(str::to_owned)
 }
 
 fn assert_rejected(outcome: &MergeOutcome, why: &str) {
@@ -195,7 +192,7 @@ fn a_chunk_with_the_wrong_hash_is_refused_for_good() {
         let author = node().await;
         let peer = node().await;
         let parent = parent_article(&peer).await;
-        let before = list_of(&peer, &parent).await;
+        let before = body_of(&peer, &parent).await;
 
         let collection = chunks_of(&author);
         let forged = chunk(&collection, &parent, "garbage", &text_hash("real text"));
@@ -224,7 +221,7 @@ fn a_chunk_with_the_wrong_hash_is_refused_for_good() {
 
         let chunk_id = DocID::from_string(&built.doc_id).unwrap();
         assert!(stored(&peer, &chunks_of(&peer), &chunk_id).await.is_none());
-        assert_eq!(list_of(&peer, &parent).await, before);
+        assert_eq!(body_of(&peer, &parent).await, before);
     })
     .unwrap()
 }
@@ -235,7 +232,7 @@ fn a_chunk_cannot_be_rewritten_after_it_merged() {
         let author = node().await;
         let peer = node().await;
         let parent = parent_article(&peer).await;
-        let before = list_of(&peer, &parent).await;
+        let before = body_of(&peer, &parent).await;
 
         let collection = chunks_of(&author);
         let text = "original text";
@@ -282,7 +279,7 @@ fn a_chunk_cannot_be_rewritten_after_it_merged() {
         .await;
 
         assert_eq!(stored(&peer, &peer_chunks, &chunk_id).await.unwrap(), kept);
-        assert_eq!(list_of(&peer, &parent).await, before);
+        assert_eq!(body_of(&peer, &parent).await, before);
     })
     .unwrap()
 }
