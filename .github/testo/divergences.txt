@@ -31,3 +31,7 @@ testo index::json_array_filter::all_keeps_an_empty_array
 # With an index on the related field, Go returns ties in index order and ignores the second order condition; Rust applies it.
 testo index::query_with_relation_tie_order::a_page_of_ties_follows_the_second_condition_with_an_index
 testo index::query_with_relation_tie_order::ties_follow_the_second_condition_with_an_index
+# With range conditions on two paths of one JSON index, Go bounds the scan by the wrong path and misses matching documents; Rust bounds it by one path and filters the rest.
+testo index::json_range_paths::a_range_and_ne_on_two_paths
+testo index::json_range_paths::ranges_on_two_paths
+testo index::json_range_paths::all_ranges_on_two_paths
