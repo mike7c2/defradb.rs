@@ -551,6 +551,56 @@ fn test_filter_to_scan_json_path_range() {
 }
 
 #[test]
+fn test_filter_to_scan_descending_json_path_keeps_the_path_sentinels() {
+    let at = |value| {
+        NormalValue::JsonLeaf(document::JsonLeafValue::new(
+            document::JsonPath::new().append_property("height"),
+            value,
+        ))
+    };
+    let min = Bound::Inclusive(at(JsonScalarValue::PathMin));
+    let max = Bound::Exclusive(at(JsonScalarValue::PathMax));
+    let value = Bound::Exclusive(at(JsonScalarValue::Number(170.0)));
+    let bounds = |condition: JsonValue, descending: bool| {
+        let filter = make_filter(map([(
+            "custom".to_string(),
+            json!({ "height": condition }),
+        )]));
+        let mut index = single_field_index("custom");
+        index.fields[0].descending = descending;
+        match filter_to_index_scan(&filter, &index, None, &[], None, 0)
+            .unwrap()
+            .scan_type
+        {
+            IndexScanType::RangeScan { lower, upper, .. } => (lower, upper),
+            other => panic!("expected RangeScan, got {other:?}"),
+        }
+    };
+
+    // The path stays ascending, so the open end is PathMin below and PathMax
+    // above in both directions. Only the value bound moves.
+    assert_eq!(
+        bounds(json!({"_gt": 170}), false),
+        (value.clone(), max.clone())
+    );
+    assert_eq!(
+        bounds(json!({"_gt": 170}), true),
+        (min.clone(), value.clone())
+    );
+    assert_eq!(
+        bounds(json!({"_lt": 170}), false),
+        (min.clone(), value.clone())
+    );
+    assert_eq!(bounds(json!({"_lt": 170}), true), (value, max.clone()));
+    for descending in [false, true] {
+        assert_eq!(
+            bounds(json!({"_ne": 170}), descending),
+            (min.clone(), max.clone())
+        );
+    }
+}
+
+#[test]
 fn test_filter_to_scan_top_level_json_lte_null_uses_index() {
     // Go uses the JSON index for top-level {custom: {_leq: null}} because
     // explicit nulls and missing JSON fields are both indexed as null.
