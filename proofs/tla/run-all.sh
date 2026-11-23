@@ -551,6 +551,7 @@ RUNS=(
   "MC_EncryptionPolicyInheritance_Red_Monotone.cfg EncryptionPolicyInheritance.tla RED" # the false premise: a remote plaintext merge breaks "every field encrypted" (PROP_EncryptedMonotone)
   "MC_EncryptionPolicyInheritance_Red_UnpreparedDecision.cfg EncryptionPolicyInheritance.tla RED" # the builder re-decides rule (c) and needs an unminted key (INV_PreparedKeyCovers)
   "MC_EncryptionPolicyInheritance_Red_TornSnapshot.cfg EncryptionPolicyInheritance.tla RED" # heads read field by field at two times (INV_StaleDecisionSerializable)
+  "MC_EncryptionPolicyInheritance_Red_NoPending.cfg EncryptionPolicyInheritance.tla RED" # a preparation ignores the request's earlier writes, written_fields (INV_SeesRequestWrites)
   "MC_Truncate_Green.cfg Truncate.tla GREEN" # #2321: truncate checks nac and chunk, then for a filter branchable, txn and shape, before a delete that is durable at once and empties a view's cache
   "MC_Truncate_Red_Chunk.cfg Truncate.tla RED" # chunk check left out: a truncate empties a chunk collection its parents still list (INV_NoRemovalFromChunks)
   "MC_Truncate_Red_Nac.cfg Truncate.tla RED" # permission check left out: a caller without CollectionTruncate removes documents (INV_NoRemovalWithoutPermission)

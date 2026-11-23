@@ -318,7 +318,7 @@ Querying an encrypted document returns its plaintext fields, including a `pcount
 # `go.encryption.doc.doc_id`: An encrypted document gets Go's docID
 
 - **Parents:** ["go.encryption.doc"]
-- **Scenarios:** ["encryption::doc_id::doc_encryption_doc_id_matches_go"]
+- **Scenarios:** ["encryption::doc_id::doc_encryption_doc_id_matches_go", "encryption::doc_id::doc_encryption_update_and_delete_composites_match_go"]
 
 A document created with `encrypt: true` gets the docID Go assigns to the same document. Only field commits link an encryption block: the `_C` commit of a create, an update or a delete links none, so its CID, and the docID derived from it, equal Go's. With Go's test key and nonce, `{"name": "John", "age": 21}` in `Users { name: String, age: Int @crdt(type: lww), verified: Boolean }` gets `bae-e1226eb9-e7dc-5185-986b-6236af58b1ed`, and its `_C` commit is `bafyreiagbtfpc23gmdiycsdfkzcks544xe7ud4i7joxwj47bdmmwhdlclm`.
 

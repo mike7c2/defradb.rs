@@ -647,9 +647,10 @@
     "id": "go.encryption.doc.doc_id",
     "verdict": "covered",
     "rust_tests": [
-      "tools/integration-test/tests/testo/encryption/doc_id.rs::doc_encryption_doc_id_matches_go"
+      "tools/integration-test/tests/testo/encryption/doc_id.rs::doc_encryption_doc_id_matches_go",
+      "tools/integration-test/tests/testo/encryption/doc_id.rs::doc_encryption_update_and_delete_composites_match_go"
     ],
-    "evidence": "doc_id.rs asserts Go's literal docID bae-e1226eb9-e7dc-5185-986b-6236af58b1ed and the `age`, `name` and `_C` commit CIDs for john21Doc created with encrypt:true, measured from a Go integration test at 307364d9d with Go's test key and nonce (#2742).",
+    "evidence": "doc_id.rs asserts Go's literal docID bae-e1226eb9-e7dc-5185-986b-6236af58b1ed and the `age`, `name` and `_C` commit CIDs for john21Doc created with encrypt:true, and the `_C` CIDs after an update (height 2) and a delete (height 3) of it, all measured from a Go integration test at 307364d9d with Go's test key and nonce (#2742).",
     "note": "Run in-process. rust-http and cli talk to the same in-process Rust nodes, which use Go's test key and nonce (tools/integration-test/src/nodes.rs). Under go-http the Go release binary encrypts with random keys, so the literal cannot match there (#2519)."
   },
   {

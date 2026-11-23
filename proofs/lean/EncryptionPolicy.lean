@@ -9,14 +9,18 @@ blocks, encrypted or plaintext. One function decides
       encrypted head, or stays plaintext when none is encrypted;
   (c) a field with no heads gets a fresh document key only when the document
       has a field and every field is encrypted; otherwise it is plaintext.
-The composite block links no encryption, so the docID is Go's.
+The composite block links no encryption, so the docID is Go's. When one
+request carries several writes, each is prepared before any is written, so a
+later preparation counts the fields the earlier ones prepared as written,
+each with one head of the kind its write prepared (`written_fields`).
 
 What must never happen: a field with heads decides differently from Go; a
 plaintext field is encrypted without a config; an empty document counts as
 encrypted; a composite carries a link.
 
 Rust owner: crates/database/db/src/block/builder/write.rs
-`field_encryption_source`, `every_field_encrypted`, `build_document_blocks`
+`field_encryption_source`, `every_field_encrypted`, `DocScope::preparing`,
+`doc_scope_fields` (the `pending` overlay), `build_document_blocks`
 (the composite), `write_delete_block_with_inputs` (the tombstone);
 crates/database/db/src/block/builder/compute.rs `compute_document_blocks`.
 -/
@@ -171,6 +175,56 @@ theorem every_field_encrypted_is_not_monotone :
     docAll ⟨[0], fun g => if g = 0 then [Kind.enc] else []⟩ = true ∧
     docAll ⟨[0, 1], fun g => if g = 0 then [Kind.enc] else [Kind.plain]⟩ = false := by
   -- Both computed directly.
+  decide
+
+-- The request's earlier writes, prepared but not committed yet: the fields
+-- they wrote, and how each one left its field (`written_fields`).
+structure Pending where
+  fields : List Nat
+  kind : Nat → Kind
+
+-- The heads a later preparation of the same request decides on: a pending
+-- field has one head, of the kind its write prepared; every other field
+-- keeps its committed heads (`DocScope::preparing` with `pending`).
+def overlay (s : Snap) (p : Pending) : Snap :=
+  { fields := p.fields ++ s.fields.filter (fun g => !p.fields.contains g),
+    heads := fun g => if p.fields.contains g then [p.kind g] else s.heads g }
+
+-- A field an earlier write of the request prepared counts as written: with
+-- no config it follows the kind that write left it with, never rule (c).
+theorem pending_field_follows_its_write (s : Snap) (p : Pending) (g : Nat)
+    (hg : g ∈ p.fields) :
+    source none (overlay s p) g =
+      (if p.kind g = Kind.enc then Source.inherit else Source.plaintext) := by
+  -- The overlay gives `g` exactly one head, so the fallback follows it.
+  cases hk : p.kind g <;> simp [source, fallback, overlay, encrypted, hg, hk]
+
+-- A pending plaintext field ends rule (c): the document is not wholly
+-- encrypted, as `every_field_encrypted`'s early return on `pending` says.
+theorem pending_plaintext_blocks_doc_scope (s : Snap) (p : Pending) (g : Nat)
+    (hg : g ∈ p.fields) (hk : p.kind g = Kind.plain) :
+    docAll (overlay s p) = false := by
+  -- `g` is one of the overlay's fields, and its one head is plaintext.
+  have hall : (overlay s p).fields.all (fun f => encrypted ((overlay s p).heads f)) = false := by
+    rw [List.all_eq_false]
+    exact ⟨g, by simp [overlay, hg], by simp [overlay, encrypted, hg, hk]⟩
+  -- So the "every field" half of `docAll` fails.
+  simp [docAll, hall]
+
+-- Create then update in one request, on a new document: the create encrypts
+-- field 0 by config, the update writes field 1 with none. Counting the
+-- create's pending field, field 1 takes the document key.
+theorem create_then_update_takes_doc_key :
+    source none (overlay ⟨[], fun _ => []⟩ ⟨[0], fun _ => Kind.enc⟩) 1 =
+      Source.docScopeNew := by
+  -- Computed directly.
+  decide
+
+-- The same update decided on the committed heads alone sees no field at
+-- all and writes plaintext: why the preparation carries `written_fields`.
+theorem committed_heads_alone_miss_the_create :
+    source none ⟨[], fun _ => []⟩ 1 = Source.plaintext := by
+  -- Computed directly.
   decide
 
 -- A composite block: its encryption link, if any.
