@@ -411,6 +411,32 @@ impl RangeIterator {
     }
 }
 
+impl RangeIterator {
+    /// Seeks past the block of empty array entries `key` opens, so a range
+    /// reads one of them, not each. `false` when nothing is left past it.
+    async fn skip_empty_arrays(&mut self, key: &[u8], values: &[NormalValue]) -> Result<bool> {
+        let mut block = key[..self.index_prefix_len].to_vec();
+        for (i, value) in values.iter().enumerate() {
+            let descending = self.desc.fields.get(i).is_some_and(|f| f.descending);
+            block = encode_field_value(block, value, descending)?;
+        }
+        if !key.starts_with(&block) {
+            return Ok(true);
+        }
+        if self.reverse {
+            self.inner.seek(&block).await?;
+            return Ok(true);
+        }
+        match prefix_successor(&block) {
+            Some(after) => {
+                self.inner.seek(&after).await?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+}
+
 /// First key after every key beginning with `prefix`.
 fn prefix_successor(prefix: &[u8]) -> Option<Vec<u8>> {
     let mut successor = prefix.to_vec();
@@ -473,11 +499,19 @@ impl IndexIterator for RangeIterator {
                     }
 
                     let entry = self.extract_entry(&kv.key, &kv.value)?;
-                    if self
-                        .range_field
-                        .and_then(|field| entry.values.get(field))
-                        .is_some_and(NormalValue::is_empty_array_entry)
-                    {
+                    if let Some(field) = self.range_field.filter(|field| {
+                        entry
+                            .values
+                            .get(*field)
+                            .is_some_and(NormalValue::is_empty_array_entry)
+                    }) {
+                        if !self
+                            .skip_empty_arrays(&kv.key, &entry.values[..=field])
+                            .await?
+                        {
+                            self.exhausted = true;
+                            return Ok(None);
+                        }
                         continue;
                     }
                     return Ok(Some(entry));
