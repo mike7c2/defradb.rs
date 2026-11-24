@@ -225,18 +225,30 @@ pub fn filter_to_index_scan(
                     range_all = range_all.or(all_path(cond));
                 }
             }
+            // The first `_all` pins the scan path, so its empty-array lookup
+            // reads the same path; the filter checks the others.
+            FilterOp::Ne
+            | FilterOp::Nin
+            | FilterOp::Like
+            | FilterOp::Nlike
+            | FilterOp::Ilike
+            | FilterOp::Nilike
+                if scan_all_all.is_some() =>
+            {
+                has_scan_all = true;
+            }
             // _ne/_nin/_like/_nlike use full index scan with post-filtering (matches Go behavior)
             // For JSON fields, we still need to track the path to constrain the scan
             FilterOp::Ne | FilterOp::Nin => {
                 has_scan_all = true;
-                scan_all_all = scan_all_all.or(all_path(cond));
-                if cond.json_path.is_some() {
+                scan_all_all = all_path(cond);
+                if cond.json_path.is_some() || scan_all_all.is_some() {
                     scan_json_path = cond.json_path.clone();
                 }
             }
             FilterOp::Like | FilterOp::Nlike | FilterOp::Ilike | FilterOp::Nilike => {
                 has_scan_all = true;
-                scan_all_all = scan_all_all.or(all_path(cond));
+                scan_all_all = all_path(cond);
                 if let ConditionValue::Pattern(pattern) = &cond.value {
                     scan_value_filter = Some(match cond.op {
                         FilterOp::Like => ScanValueFilter::Like(pattern.clone()),
@@ -246,7 +258,7 @@ pub fn filter_to_index_scan(
                         _ => unreachable!(),
                     });
                 }
-                if cond.json_path.is_some() {
+                if cond.json_path.is_some() || scan_all_all.is_some() {
                     scan_json_path = cond.json_path.clone();
                 }
             }
