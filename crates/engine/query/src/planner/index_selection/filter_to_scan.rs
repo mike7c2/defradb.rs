@@ -157,19 +157,23 @@ pub fn filter_to_index_scan(
     let mut upper_bound = Bound::Unbounded;
     let mut range_json_path: Option<JsonPath> = None;
     let mut scan_json_path: Option<JsonPath> = None;
-    // Bounds on two paths cannot share one scan, so only the first range
-    // path bounds it and the filter checks the rest.
-    let range_path = first_field_conditions
-        .iter()
-        .find(|cond| {
-            cond.array_op != Some(FilterOp::None)
-                && matches!(
-                    cond.op,
-                    FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte
-                )
-                && matches!(cond.value, ConditionValue::Single(_))
+    // Bounds on two paths cannot share one scan, and neither can bounds from
+    // two `_any` clauses, so only the first range bounds it and the filter
+    // checks the rest.
+    let first_range = first_field_conditions.iter().find(|cond| {
+        cond.array_op != Some(FilterOp::None)
+            && matches!(
+                cond.op,
+                FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte
+            )
+            && matches!(cond.value, ConditionValue::Single(_))
+    });
+    let in_range = |cond: &super::types::FieldCondition| {
+        first_range.is_some_and(|first| {
+            first.json_path == cond.json_path
+                && (cond.array_op != Some(FilterOp::Any) || first.clause == cond.clause)
         })
-        .map(|cond| cond.json_path.clone());
+    };
     // A full scan reads one path. A bare `_nin` passes a document missing its
     // path, which has no entry there, so it chooses only when nothing else can.
     let full_scan_at = first_field_conditions
@@ -205,28 +209,28 @@ pub fn filter_to_index_scan(
                     in_all = all_path(cond);
                 }
             }
-            FilterOp::Gt if range_path.as_ref() == Some(&cond.json_path) => {
+            FilterOp::Gt if in_range(cond) => {
                 if let ConditionValue::Single(v) = &cond.value {
                     lower_bound = Bound::Exclusive(v.clone());
                     range_json_path = cond.json_path.clone();
                     range_all = range_all.or(all_path(cond));
                 }
             }
-            FilterOp::Gte if range_path.as_ref() == Some(&cond.json_path) => {
+            FilterOp::Gte if in_range(cond) => {
                 if let ConditionValue::Single(v) = &cond.value {
                     lower_bound = Bound::Inclusive(v.clone());
                     range_json_path = cond.json_path.clone();
                     range_all = range_all.or(all_path(cond));
                 }
             }
-            FilterOp::Lt if range_path.as_ref() == Some(&cond.json_path) => {
+            FilterOp::Lt if in_range(cond) => {
                 if let ConditionValue::Single(v) = &cond.value {
                     upper_bound = Bound::Exclusive(v.clone());
                     range_json_path = cond.json_path.clone();
                     range_all = range_all.or(all_path(cond));
                 }
             }
-            FilterOp::Lte if range_path.as_ref() == Some(&cond.json_path) => {
+            FilterOp::Lte if in_range(cond) => {
                 if let ConditionValue::Single(v) = &cond.value {
                     upper_bound = Bound::Inclusive(v.clone());
                     range_json_path = cond.json_path.clone();
