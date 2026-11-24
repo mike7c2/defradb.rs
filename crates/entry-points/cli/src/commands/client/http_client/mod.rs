@@ -187,13 +187,22 @@ impl HttpClient {
 
     /// Whether a request that answered `status` may be sent again. A read
     /// may, on any transient status. A write only on a status that refused it
-    /// before it ran (408, 429, 503): after a 500, 502 or 504 it may have
-    /// committed, and a resend could apply it twice or hide its outcome
-    /// (`defra.txn.commit_outcome.no_resend`).
+    /// before it ran (429, 503): after a 500, 502 or 504 it may have
+    /// committed, a 408 leaves it running on the server, and a resend could
+    /// apply it twice or hide its outcome (`defra.txn.commit_outcome.no_resend`).
     pub fn may_resend(method: &str, status: StatusCode) -> bool {
         match method {
             "GET" => Self::is_retryable_status(status),
-            _ => matches!(status.as_u16(), 408 | 429 | 503),
+            _ => matches!(status.as_u16(), 429 | 503),
+        }
+    }
+
+    /// The error a request that got no answer ends in: a write that reached
+    /// the server may have committed (`defra.txn.commit_outcome.indeterminate`).
+    fn send_error(method: &str, error: net::http::Error) -> Error {
+        match method == "GET" || error.is_connect() {
+            true => Error::HttpRequest(error),
+            false => Error::Unanswered(error),
         }
     }
 
@@ -310,7 +319,7 @@ impl HttpClient {
                         continue;
                     }
 
-                    return Err(Error::HttpRequest(e));
+                    return Err(Self::send_error(method, e));
                 }
             }
         }
@@ -326,17 +335,32 @@ impl HttpClient {
 
     /// Extract error details from a failed response and return an error: the
     /// server's `{"error": …}` text unchanged, as Go's client returns it, or
-    /// the status and raw body when the body is not that shape.
-    async fn extract_error(response: Response) -> Error {
+    /// the status and raw body when the body is not that shape. A write
+    /// answered 408 or a 5xx other than 503 may have committed, so it is
+    /// `indeterminate` unless the body says what the commit did
+    /// (`defra.txn.commit_outcome.indeterminate`).
+    async fn extract_error(method: &str, response: Response) -> Error {
         let status = response.status();
         let body = response
             .text()
             .await
             .unwrap_or_else(|e| format!("[failed to read body: {}]", e));
-        match serde_json::from_str::<types::ErrorResponse>(&body) {
+        let error = match serde_json::from_str::<types::ErrorResponse>(&body) {
             Ok(parsed) => parsed.into_error(),
             Err(_) => Error::Server(format!("HTTP {}: {}", status, body.trim())),
+        };
+        match method != "GET" && Self::may_follow_a_commit(status) {
+            true => error.unless_outcome_known(),
+            false => error,
         }
+    }
+
+    /// Whether a write answered `status` may have committed: the server
+    /// failed after it took the write (a 5xx other than 503's refusal), or
+    /// stopped waiting for it while it ran on (408).
+    fn may_follow_a_commit(status: StatusCode) -> bool {
+        status == StatusCode::REQUEST_TIMEOUT
+            || (status.is_server_error() && status != StatusCode::SERVICE_UNAVAILABLE)
     }
 
     /// Helper for POST requests with plain text body
@@ -354,7 +378,10 @@ impl HttpClient {
             eprintln!(">>> Body: {}", text);
         }
 
-        let response = request.send().await.map_err(Error::HttpRequest)?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| Self::send_error("POST", error))?;
 
         if self.verbose {
             eprintln!("<<< HTTP {}", response.status());
@@ -369,19 +396,7 @@ impl HttpClient {
         let response = self.send_with_retry("POST", url, Some(&body_str)).await?;
 
         if !response.status().is_success() {
-            let status = response.status();
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|e| format!("[failed to read body: {}]", e));
-            if let Ok(err) = serde_json::from_str::<types::ErrorResponse>(&body_text) {
-                return Err(err.into_error());
-            }
-            return Err(Error::Server(format!(
-                "HTTP {}: {}",
-                status,
-                body_text.trim()
-            )));
+            return Err(Self::extract_error("POST", response).await);
         }
 
         let result: T = response.json().await?;
@@ -408,7 +423,10 @@ impl HttpClient {
             eprintln!(">>> Body: {}", text);
         }
 
-        let response = request.send().await.map_err(Error::HttpRequest)?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| Self::send_error("POST", error))?;
 
         if self.verbose {
             eprintln!("<<< HTTP {}", response.status());
@@ -425,7 +443,7 @@ impl HttpClient {
     ) -> Result<T> {
         let response = self.send_with_retry(method, url, body).await?;
         if !response.status().is_success() {
-            return Err(Self::extract_error(response).await);
+            return Err(Self::extract_error(method, response).await);
         }
         Ok(response.json().await?)
     }
@@ -438,7 +456,7 @@ impl HttpClient {
     ) -> Result<()> {
         let response = self.send_with_retry(method, url, body).await?;
         if !response.status().is_success() {
-            return Err(Self::extract_error(response).await);
+            return Err(Self::extract_error(method, response).await);
         }
         Ok(())
     }
@@ -456,7 +474,7 @@ impl HttpClient {
     async fn request_text(&self, method: &str, url: &str, body: Option<&str>) -> Result<String> {
         let response = self.send_with_retry(method, url, body).await?;
         if !response.status().is_success() {
-            return Err(Self::extract_error(response).await);
+            return Err(Self::extract_error(method, response).await);
         }
         Ok(response.text().await?)
     }

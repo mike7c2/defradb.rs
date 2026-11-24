@@ -194,9 +194,11 @@ fn an_indeterminate_commit_is_not_resent() {
     .execute();
 }
 
+/// GraphQL answers a commit failure with HTTP 200, so no client resends it:
+/// this checks what the node leaves, not the client's resend rule.
 #[test]
-#[mantra_macros::req_test("defra.txn.commit_outcome.no_resend")]
-fn an_indeterminate_autocommit_write_is_not_resent() {
+#[mantra_macros::req_test("defra.txn.commit_outcome.indeterminate")]
+fn an_autocommit_write_that_fails_at_commit_is_all_or_nothing() {
     TestCase {
         client_types: Some(RUST_CLIENTS),
         ..TestCase::from_actions(vec![

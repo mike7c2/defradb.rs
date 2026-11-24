@@ -320,14 +320,14 @@ A document created in an explicit transaction whose commit answered success read
 - **Parents:** ["defra.txn.commit_outcome"]
 - **Scenarios:** ["txn::commit_outcome::a_conflict_refusal_leaves_nothing_and_reports_aborted"]
 
-A commit refused before anything is durable (a write conflict, a unique-index violation, a validation or ACP refusal, any error before the storage commit, or a storage refusal regolith documents as applying nothing: a stall, a closed store, a content mismatch, a panicking callback) answers `"outcome": "aborted"`, and none of its writes is visible. A commit that loses a write conflict answers HTTP 409 with `{"error": "transaction conflict. Please retry", "outcome": "aborted"}`, and the CLI exits with status 3. `GET /api/v0/tx/{id}` then answers `{"outcome": "aborted"}`.
+A commit refused before anything is durable (a write conflict, a unique-index violation, a validation or ACP refusal, any error before the storage commit, or a storage refusal regolith documents as applying nothing: a stall, a closed store, a content mismatch, a panicking callback) answers `"outcome": "aborted"`, and none of its writes is visible. Every commit failure that is not `indeterminate` below is such a refusal: it keeps its HTTP status and text and carries `"outcome": "aborted"`, as `GET /api/v0/tx/{id}` then does. A store latched by an earlier failed log sync refuses every later commit with that I/O error, and such a refusal is reported `indeterminate`, the safe side. A commit that loses a write conflict answers HTTP 409 with `{"error": "transaction conflict. Please retry", "outcome": "aborted"}`, and the CLI exits with status 3. `GET /api/v0/tx/{id}` then answers `{"outcome": "aborted"}`.
 
 # `defra.txn.commit_outcome.indeterminate`: A commit the node cannot vouch for says `indeterminate`
 
 - **Parents:** ["defra.txn.commit_outcome"]
-- **Scenarios:** ["txn::commit_outcome::an_injected_io_failure_at_commit_reports_indeterminate"]
+- **Scenarios:** ["txn::commit_outcome::an_injected_io_failure_at_commit_reports_indeterminate", "txn::commit_outcome::an_autocommit_write_that_fails_at_commit_is_all_or_nothing"]
 
-A commit whose storage commit fails with an I/O error, corruption, a failed merge or an engine error the node does not know answers `"outcome": "indeterminate"` with the storage error's text, which for an I/O failure names it: `Input/output error (os error 5)`. The HTTP status stays what it was: 507 for full storage, 500 otherwise. The CLI exits with status 4. `GET /api/v0/tx/{id}` then answers `{"outcome": "indeterminate"}`. After the node starts again without the fault, the transaction's writes are either all there or all absent. At the client, a 5xx answer with no outcome, or a timeout after the request was sent, is `indeterminate`.
+A commit whose storage commit fails with an I/O error, corruption, a failed merge or an engine error the node does not know answers `"outcome": "indeterminate"` with the storage error's text, which for an I/O failure names it: `Input/output error (os error 5)`. The HTTP status stays what it was: 507 for full storage, 500 otherwise. The CLI exits with status 4. `GET /api/v0/tx/{id}` then answers `{"outcome": "indeterminate"}`. After the node starts again without the fault, the transaction's writes are either all there or all absent. At the client, a request other than GET is `indeterminate`, and the CLI exits with status 4, when its answer is a 408 (the server stops waiting, but the request runs on) or a 5xx other than 503 and carries no `outcome`, or when no answer came back after the request was sent (a timeout, a connection closed mid-reply). An `outcome` the server sent wins.
 
 # `defra.txn.commit_outcome.no_open_txn`: A commit that finds no open transaction reports what is known of it
 
@@ -339,9 +339,9 @@ A commit of an ID that names no open transaction answers HTTP 404 `transaction n
 # `defra.txn.commit_outcome.no_resend`: A write the server may have applied is not sent again
 
 - **Parents:** ["defra.txn.commit_outcome"]
-- **Scenarios:** ["txn::commit_outcome::an_indeterminate_commit_is_not_resent", "txn::commit_outcome::an_indeterminate_autocommit_write_is_not_resent"]
+- **Scenarios:** ["txn::commit_outcome::an_indeterminate_commit_is_not_resent"]
 
-The HTTP client sends a request other than GET (a commit, a REST write, any `POST /api/v0/graphql`) again only when the connection failed before the request was sent, or the answer was 408, 429 or 503. Any other 5xx answer, or a timeout after the request was sent goes back to the caller at once: an indeterminate commit reaches its caller as the I/O error, never as `transaction not found`, and the server sees one commit request. An autocommit mutation that fails at commit creates at most one document. Every GET keeps the client's retries on 408, 429, 500, 502, 503 and 504, and on a timeout.
+The HTTP client sends a request other than GET (a commit, a REST write, any `POST /api/v0/graphql`) again only when the connection failed before the request was sent, or the answer was 429 or 503. A 408, any other 5xx answer, or a timeout after the request was sent goes back to the caller at once: an indeterminate commit reaches its caller as the I/O error, never as `transaction not found`, and the server sees one commit request. A 408 is not resent because the server's request timeout drops only its wait: the handler and the commit it started run on. `POST /api/v0/graphql` answers a failed mutation, a commit failure included, with HTTP 200 and GraphQL errors, so there is nothing to resend. Every GET keeps the client's retries on 408, 429, 500, 502, 503 and 504, and on a timeout.
 
 # `defra.txn.commit_outcome.cli_exit`: The CLI's exit status names the outcome
 

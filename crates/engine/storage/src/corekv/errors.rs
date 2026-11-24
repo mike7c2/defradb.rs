@@ -227,14 +227,13 @@ impl Error {
         }
     }
 
-    /// Whether the write this error ended committed: not, for a conflict;
-    /// unknown, for a failure while the engine made the commit durable;
-    /// `None` when the error says nothing about a commit.
+    /// Whether the write this error ended committed: not, for a conflict or
+    /// an I/O failure before the storage commit; unknown, for a failure while
+    /// the engine made the commit durable; `None` when the error says nothing
+    /// about a commit.
     pub fn commit_outcome(&self) -> Option<defra_core::CommitOutcome> {
         match self {
-            Self::Io(cause) if cause.is_at_commit() => {
-                Some(defra_core::CommitOutcome::Indeterminate)
-            }
+            Self::Io(cause) => cause.commit_outcome(),
             Self::CommitIndeterminate(_) => Some(defra_core::CommitOutcome::Indeterminate),
             Self::TxnConflict | Self::TxnConflictDetails(_) | Self::TxnRetryExhausted(_) => {
                 Some(defra_core::CommitOutcome::NotCommitted)

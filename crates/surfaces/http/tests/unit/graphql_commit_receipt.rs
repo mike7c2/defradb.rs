@@ -43,8 +43,10 @@ fn commit_receipt_matches_model() {
 }
 
 /// A commit failure says what the commit did: `indeterminate` for one that
-/// failed while the engine made it durable, what the registry retained for a
-/// transaction it no longer holds (`defra.txn.commit_outcome`).
+/// failed while the engine made it durable, `aborted` for one refused before
+/// anything was durable, what the registry retained for a transaction it no
+/// longer holds, and nothing for an error that ended no commit
+/// (`defra.txn.commit_outcome`).
 #[nuclei::test]
 async fn a_commit_failure_carries_its_outcome() {
     let io = storage::Error::from(std::io::Error::from_raw_os_error(5)).at_commit();
@@ -65,6 +67,11 @@ async fn a_commit_failure_carries_its_outcome() {
                 .with_commit_outcome(defra_core::CommitOutcome::Indeterminate),
             StatusCode::NOT_FOUND,
             Some("indeterminate"),
+        ),
+        (
+            TransactionError::commit_refused("datastore is closed"),
+            StatusCode::BAD_REQUEST,
+            Some("aborted"),
         ),
         (
             TransactionError::operation("refused"),

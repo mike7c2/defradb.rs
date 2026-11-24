@@ -613,7 +613,9 @@ mod append_tests {
     }
 
     /// Only a commit failure that may have landed reports `indeterminate`;
-    /// the I/O cause stays typed, and a refusal says nothing about a commit.
+    /// the I/O cause stays typed. A refusal is not marked here: the registry's
+    /// `commit_error` answers every commit failure that is not indeterminate
+    /// `aborted`.
     #[test]
     fn only_a_commit_failure_that_may_have_landed_is_indeterminate() {
         use super::{commit_failure, map_txn_error, Error, TransactionError};

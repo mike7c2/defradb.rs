@@ -36,6 +36,13 @@ pub enum TransactionError {
     #[error("transaction conflict: {0}")]
     Conflict(String),
 
+    /// The commit was refused before anything of it was durable, for a
+    /// reason other than a conflict, so it is `aborted`
+    /// (`defra.txn.commit_outcome.not_committed`). The same text as
+    /// [`Self::Execution`].
+    #[error("transaction error: {0}")]
+    CommitRefused(String),
+
     /// An operation inside the transaction was refused; the message is the
     /// reason, in Go's words, with no prefix.
     #[error("{0}")]
@@ -85,6 +92,11 @@ impl TransactionError {
         Self::Conflict(msg.into())
     }
 
+    /// Create the error of a commit refused before anything was durable.
+    pub fn commit_refused(msg: impl Into<String>) -> Self {
+        Self::CommitRefused(msg.into())
+    }
+
     /// Create a lock poisoned error.
     pub fn lock_poisoned(msg: impl Into<String>) -> Self {
         Self::LockPoisoned(msg.into())
@@ -107,6 +119,8 @@ impl TransactionError {
     /// - `Storage`: Uses the storage owner's classification; a full disk or
     ///   uncertain WAL does not authorize replay.
     /// - `Conflict`: Retryable - another commit won a write conflict.
+    /// - `CommitRefused`: Retryable, as `Execution` - nothing of the commit is
+    ///   durable.
     /// - `LockPoisoned`: Not retryable - indicates a panic occurred and the system
     ///   may be in a corrupted state.
     /// - `NeedsInput`: Not retryable as it is - the turn runs again only once
@@ -117,7 +131,7 @@ impl TransactionError {
             Self::AlreadyFinalized(_) => false,
             Self::NotSupported(_) => false,
             Self::Operation(_) => false,
-            Self::Execution(_) => true,
+            Self::Execution(_) | Self::CommitRefused(_) => true,
             Self::Storage(source) => source.is_retriable(),
             Self::Conflict(_) => true,
             Self::LockPoisoned(_) => false,
@@ -126,13 +140,15 @@ impl TransactionError {
     }
 
     /// Whether the commit this error ended landed, when it says
-    /// (`defra.txn.commit_outcome`): not, for a lost conflict; unknown, for a
-    /// failure while the engine made it durable; what the registry retained,
-    /// for a transaction it no longer holds.
+    /// (`defra.txn.commit_outcome`): not, for a lost conflict or another
+    /// refusal; unknown, for a failure while the engine made it durable; what
+    /// the registry retained, for a transaction it no longer holds.
     pub fn commit_outcome(&self) -> Option<defra_core::CommitOutcome> {
         match self {
             Self::NotFound(missing) => missing.outcome,
-            Self::Conflict(_) => Some(defra_core::CommitOutcome::NotCommitted),
+            Self::Conflict(_) | Self::CommitRefused(_) => {
+                Some(defra_core::CommitOutcome::NotCommitted)
+            }
             Self::Storage(source) => source.commit_outcome(),
             _ => None,
         }

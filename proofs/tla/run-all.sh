@@ -346,6 +346,7 @@ RUNS=(
   "MC_CommitOutcome_Red_RetainAborted.cfg CommitOutcome.tla RED" # the registry retains aborted for a failure that may have landed (INV_AbortedMeansNothingLanded)
   "MC_CommitOutcome_Red_NotFoundAborted.cfg CommitOutcome.tla RED" # a not-found commit is answered aborted with no abort retained (INV_AbortedMeansNothingLanded)
   "MC_CommitOutcome_Red_RefusalIndeterminate.cfg CommitOutcome.tla RED" # a refusal before apply is answered indeterminate (INV_RefusalIsAborted)
+  "MC_CommitOutcome_Red_LostReplyAborted.cfg CommitOutcome.tla RED" # a client concludes aborted for a write with no readable answer (INV_AbortedMeansNothingLanded)
   "MC_UnifiedAccess_Green.cfg OwnerObservation.tla GREEN"
   "MC_UnifiedAccess_Red_Actor.cfg OwnerObservation.tla RED"
   "MC_UnifiedAccess_Red_Bound.cfg OwnerObservation.tla RED"

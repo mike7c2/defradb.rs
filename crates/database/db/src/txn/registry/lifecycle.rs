@@ -837,7 +837,9 @@ impl<S: Store + 'static> TransactionRegistry for DbTransactionRegistry<S> {
 
 /// A commit that lost a write conflict is a typed, retryable conflict; a
 /// failure while the engine made it durable stays typed, so it reports that
-/// the commit may have landed.
+/// the commit may have landed. Every other failure refused the commit before
+/// anything of it was durable, so it reports `aborted`, the outcome the
+/// registry retains for it (`defra.txn.commit_outcome.not_committed`).
 fn commit_error(handle: &str, error: crate::error::Error) -> TransactionError {
     let message = format!("commit error for transaction '{handle}': {error}");
     if error.is_txn_conflict() {
@@ -846,13 +848,15 @@ fn commit_error(handle: &str, error: crate::error::Error) -> TransactionError {
         match crate::error::transaction_error(error) {
             TransactionError::Storage(storage::Error::Io(cause)) => {
                 TransactionError::Storage(storage::Error::Io(
-                    cause.with_context(format!("commit error for transaction '{handle}'")),
+                    cause
+                        .before_commit()
+                        .with_context(format!("commit error for transaction '{handle}'")),
                 ))
             }
             indeterminate @ TransactionError::Storage(storage::Error::CommitIndeterminate(_)) => {
                 indeterminate
             }
-            _ => TransactionError::execution(message),
+            _ => TransactionError::commit_refused(message),
         }
     }
 }
@@ -881,5 +885,60 @@ fn operation_error(error: crate::error::Error) -> TransactionError {
     match error {
         crate::error::Error::TransactionNotFound(message) => TransactionError::not_found(message),
         other => TransactionError::operation(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod commit_error_tests {
+    use defra_core::CommitOutcome;
+
+    use super::commit_error;
+    use crate::txn::owner::Outcome;
+
+    /// Every commit failure that is not indeterminate was refused before
+    /// anything was durable: its answer says `aborted`, as the outcome the
+    /// registry retains for it does (`defra.txn.commit_outcome.not_committed`).
+    #[test]
+    fn a_commit_refusal_answers_aborted_as_its_retained_outcome_does() {
+        let io = || storage::Error::from(std::io::Error::from_raw_os_error(5));
+        for (error, outcome, retained) in [
+            (
+                crate::error::Error::Storage(storage::Error::DBClosed),
+                CommitOutcome::NotCommitted,
+                Outcome::Aborted,
+            ),
+            (
+                crate::error::Error::Datastore(datastore::Error::Storage(storage::Error::Backend(
+                    "content mismatch".into(),
+                ))),
+                CommitOutcome::NotCommitted,
+                Outcome::Aborted,
+            ),
+            (
+                crate::error::Error::TxnNotActive,
+                CommitOutcome::NotCommitted,
+                Outcome::Aborted,
+            ),
+            (
+                crate::error::Error::Storage(io()),
+                CommitOutcome::NotCommitted,
+                Outcome::Aborted,
+            ),
+            (
+                crate::error::Error::Storage(io().at_commit()),
+                CommitOutcome::Indeterminate,
+                Outcome::Indeterminate,
+            ),
+            (
+                crate::error::Error::Storage(storage::Error::TxnConflict),
+                CommitOutcome::NotCommitted,
+                Outcome::Aborted,
+            ),
+        ] {
+            let label = error.to_string();
+            let error = commit_error("1", error);
+            assert_eq!(error.commit_outcome(), Some(outcome), "{label}");
+            assert_eq!(Outcome::of(&Err::<(), _>(error)), retained, "{label}");
+        }
     }
 }

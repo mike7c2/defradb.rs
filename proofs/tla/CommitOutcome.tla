@@ -36,7 +36,11 @@ EXTENDS TLC
 \*   answers aborted only when an abort is retained (FALSE: always aborted).
 \* ReportRefusal: a refusal before applying is reported aborted (FALSE:
 \*   reported indeterminate, which is safe but useless to the caller).
-CONSTANTS ClassifyFailure, RetainFailure, NotFoundSaysUnknown, ReportRefusal
+\* LostReplyUnknown: a client whose write got no answer it can read (a 5xx
+\*   with no outcome, a timeout after the request was sent) concludes
+\*   indeterminate (FALSE: it concludes aborted and may run it again).
+CONSTANTS ClassifyFailure, RetainFailure, NotFoundSaysUnknown, ReportRefusal,
+          LostReplyUnknown
 
 \* phase: where the commit is: "open", "applying", "refused" or "done".
 \* durable: whether the transaction's writes are on disk.
@@ -123,8 +127,19 @@ Recommit == /\ Ended
             /\ belief' = NotFoundAnswer
             /\ UNCHANGED <<phase, durable, reported, retained>>
 
+\* The answer never reaches the client in a form it can read: a 5xx with no
+\* outcome, or a timeout after the request was sent. This can happen at any
+\* phase, even before the engine starts, because the server keeps running a
+\* request whose wait timed out. The client concludes indeterminate (or, in
+\* the RED configuration that drops LostReplyUnknown, aborted). Models
+\* crates/entry-points/cli/src/commands/client/http_client/mod.rs
+\* (HttpClient::extract_error, HttpClient::send_error).
+LoseReply == /\ belief' = IF LostReplyUnknown THEN "indeterminate" ELSE "aborted"
+             /\ UNCHANGED <<phase, durable, reported, retained>>
+
 \* Any one step, by the engine, the registry or the client.
 Next == Refuse \/ Apply \/ Succeed \/ Fail \/ Expire \/ Hear \/ Ask \/ Recommit
+        \/ LoseReply
 
 \* The whole behaviour: start in Init, then take any steps.
 Spec == Init /\ [][Next]_vars

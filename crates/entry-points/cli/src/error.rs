@@ -13,7 +13,32 @@ impl Error {
     pub fn commit_outcome(&self) -> Option<defra_core::CommitOutcome> {
         match self {
             Self::Reply { outcome, .. } => *outcome,
+            Self::Unanswered(_) => Some(defra_core::CommitOutcome::Indeterminate),
             _ => None,
+        }
+    }
+
+    /// This server answer to a write, `indeterminate` unless the server said
+    /// what the commit did: the write may have committed before the server
+    /// failed (`defra.txn.commit_outcome.indeterminate`).
+    pub fn unless_outcome_known(self) -> Self {
+        let indeterminate = Some(defra_core::CommitOutcome::Indeterminate);
+        match self {
+            Self::Server(message) => Self::Reply {
+                message,
+                code: None,
+                outcome: indeterminate,
+            },
+            Self::Reply {
+                message,
+                code,
+                outcome: None,
+            } => Self::Reply {
+                message,
+                code,
+                outcome: indeterminate,
+            },
+            other => other,
         }
     }
 
@@ -136,6 +161,12 @@ pub enum Error {
 
     #[error("HTTP request failed: {0}")]
     HttpRequest(#[from] net::http::Error),
+
+    /// A write that was sent and got no answer (a timeout, a connection
+    /// closed mid-reply): it may have committed. The same text as
+    /// [`Error::HttpRequest`].
+    #[error("HTTP request failed: {0}")]
+    Unanswered(net::http::Error),
 
     #[error("server returned error: {0}")]
     Server(String),
