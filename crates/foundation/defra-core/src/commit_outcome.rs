@@ -53,6 +53,11 @@ impl CommitOutcome {
     }
 }
 
+/// The response header a server sets on an answer that refused nothing it
+/// could vouch for: a 503 for a request the node cut off at shutdown, whose
+/// write may have committed. A client never resends a write so marked.
+pub const OUTCOME_HEADER: &str = "x-defradb-outcome";
+
 #[cfg(test)]
 mod tests {
     use super::CommitOutcome;

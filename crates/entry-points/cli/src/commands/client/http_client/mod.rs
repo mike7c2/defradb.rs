@@ -186,15 +186,15 @@ impl HttpClient {
     }
 
     /// Whether a request that answered `status` may be sent again. A read
-    /// may, on any transient status. A write only on 429, which refuses it
-    /// before it runs: after any 5xx it may have committed (a 503 can answer a
-    /// handler the edge cut off mid-run), a 408 leaves it running on the
-    /// server, and a resend could apply it twice or hide its outcome
-    /// (`defra.txn.commit_outcome.no_resend`).
+    /// may, on any transient status. A write only on a status that refused it
+    /// before it ran (429, 503 without the outcome header): after a 500, 502
+    /// or 504, or a 503 the node marked indeterminate at shutdown, it may have
+    /// committed, a 408 leaves it running on the server, and a resend could
+    /// apply it twice or hide its outcome (`defra.txn.commit_outcome.no_resend`).
     pub fn may_resend(method: &str, status: StatusCode) -> bool {
         match method {
             "GET" => Self::is_retryable_status(status),
-            _ => status == StatusCode::TOO_MANY_REQUESTS,
+            _ => matches!(status.as_u16(), 429 | 503),
         }
     }
 
@@ -296,7 +296,11 @@ impl HttpClient {
                     }
 
                     // Check if this status is retryable
-                    if Self::may_resend(method, response.status()) && attempt < MAX_RETRIES {
+                    let marked = response.headers().contains_key(defra_core::OUTCOME_HEADER);
+                    if Self::may_resend(method, response.status())
+                        && !marked
+                        && attempt < MAX_RETRIES
+                    {
                         if self.verbose {
                             eprintln!("Retryable status code: {}", response.status());
                         }
@@ -337,7 +341,7 @@ impl HttpClient {
     /// Extract error details from a failed response and return an error: the
     /// server's `{"error": …}` text unchanged, as Go's client returns it, or
     /// the status and raw body when the body is not that shape. A write
-    /// answered 408 or any 5xx may have committed, so it is
+    /// answered 408 or a 5xx other than 503 may have committed, so it is
     /// `indeterminate` unless the body says what the commit did
     /// (`defra.txn.commit_outcome.indeterminate`).
     async fn extract_error(method: &str, response: Response) -> Error {
@@ -357,11 +361,11 @@ impl HttpClient {
     }
 
     /// Whether a write answered `status` may have committed: the server
-    /// failed after it took the write (any 5xx, 503 included: the edge answers
-    /// 503 for a handler it cut off at shutdown), or stopped waiting for it
-    /// while it ran on (408).
+    /// failed after it took the write (a 5xx other than 503's refusal), or
+    /// stopped waiting for it while it ran on (408).
     fn may_follow_a_commit(status: StatusCode) -> bool {
-        status == StatusCode::REQUEST_TIMEOUT || status.is_server_error()
+        status == StatusCode::REQUEST_TIMEOUT
+            || (status.is_server_error() && status != StatusCode::SERVICE_UNAVAILABLE)
     }
 
     /// Helper for POST requests with plain text body
