@@ -184,6 +184,7 @@ impl PoolShared {
             io_budget: config.io_budget,
             idle_spin: config.idle_spin,
             stuck_after: config.stuck_after,
+            slow_task_after: config.slow_task_after,
             monitored,
         }
     }

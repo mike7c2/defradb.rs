@@ -191,6 +191,14 @@ pub enum Error {
         limit: usize,
     },
 
+    /// An application topic name no node could gossip.
+    #[error("invalid application topic: {0}")]
+    InvalidAppTopic(String),
+
+    /// The node already holds a subscription to this application topic.
+    #[error("application topic {0:?} already has a subscription on this node")]
+    AppTopicSubscribed(String),
+
     /// GossipSub publish error.
     #[error("gossipsub publish error: {0}")]
     GossipSubPublish(String),
@@ -467,6 +475,15 @@ impl Error {
         matches!(self, Error::RateLimited { .. })
     }
 
+    /// Returns true when the event asked for something this node is already
+    /// doing: a PushLog for a CID another request is processing, which the
+    /// duplicate waited on and gave up. The block is merged by the request
+    /// that owns it, and a sender that needs an answer retries; nothing is
+    /// lost, so it is no fault to report.
+    pub fn is_already_in_progress(&self) -> bool {
+        matches!(self, Error::PushLogInFlight { .. })
+    }
+
     /// Returns true for an admission refusal under load (rate, saturated
     /// workers, a gossip head dropped past its budget): each is counted and
     /// answered, kept or reported where it happens, so it is not a fault.
@@ -659,6 +676,12 @@ mod tests {
             in_flight.backpressure_reply_message(),
             Some(RATE_LIMITED_MESSAGE)
         );
+        assert!(in_flight.is_already_in_progress());
+        assert!(!in_flight.is_rate_limited());
+        assert!(!Error::PushLogNotDurable {
+            cid: "bafy-head".to_string()
+        }
+        .is_already_in_progress());
 
         let rate_limited = Error::RateLimited {
             peer_id: "peer-1".into(),

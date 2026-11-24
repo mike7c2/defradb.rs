@@ -28,6 +28,7 @@
 //! A filter that dropped any of them would change what a reader or a later
 //! merge sees, which compaction must never do, so the store installs none.
 
+mod budget;
 mod classifier;
 mod config;
 mod encryption;
@@ -38,6 +39,7 @@ mod hooks;
 pub(crate) mod iterator;
 mod listener;
 mod log_layout;
+mod memory;
 pub mod merge;
 mod post_commit;
 mod prefix;
@@ -49,7 +51,9 @@ mod store;
 mod transaction;
 mod worker_io;
 
+pub use budget::MemoryBudget;
 pub use config::RegolithStoreOptions;
+pub use memory::StoreMemory;
 pub use store::RegolithStore;
 pub use transaction::RegolithTxn;
 #[cfg(not(target_arch = "wasm32"))]

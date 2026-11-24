@@ -23,6 +23,7 @@ fn tuning(monitored: bool) -> Tuning {
         io_budget: 8,
         idle_spin: Duration::ZERO,
         stuck_after: Duration::from_millis(10),
+        slow_task_after: Duration::ZERO,
         monitored,
     }
 }
@@ -38,8 +39,12 @@ fn shared() -> Arc<WorkerShared> {
 }
 
 fn worker_with(clock: Arc<ManualClock>, monitored: bool) -> (Worker, Arc<WorkerShared>) {
+    worker_tuned(clock, tuning(monitored))
+}
+
+fn worker_tuned(clock: Arc<ManualClock>, tuning: Tuning) -> (Worker, Arc<WorkerShared>) {
     let shared = shared();
-    let worker = Worker::new(shared.clone(), clock, tuning(monitored), None).unwrap();
+    let worker = Worker::new(shared.clone(), clock, tuning, None).unwrap();
     (worker, shared)
 }
 
@@ -321,6 +326,66 @@ fn an_unwatched_worker_measures_its_own_long_polls_and_reports_a_task_once() {
         vec![false, true],
         "the second poll carries the reported mark"
     );
+}
+
+/// Runs `busy_us` on the clock at each of its two polls.
+struct Busy {
+    clock: Arc<ManualClock>,
+    busy_us: u64,
+    polls: u32,
+}
+
+impl Future for Busy {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.clock.advance(self.busy_us);
+        self.polls += 1;
+        if self.polls == 2 {
+            return Poll::Ready(());
+        }
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+
+#[test]
+fn a_task_slower_than_the_limit_is_reported_and_a_quick_one_is_not() {
+    let clock = Arc::new(ManualClock::default());
+    let (mut worker, shared) = worker_tuned(
+        clock.clone(),
+        Tuning {
+            slow_task_after: Duration::from_millis(50),
+            ..tuning(true)
+        },
+    );
+    let _quick = spawn_local(Busy {
+        clock: clock.clone(),
+        busy_us: 1_000,
+        polls: 0,
+    });
+    settle(&mut worker);
+    assert_eq!(shared.stats().slow_tasks, 0);
+    let _slow = spawn_local(Busy {
+        clock,
+        busy_us: 30_000,
+        polls: 0,
+    });
+    settle(&mut worker);
+    assert_eq!(shared.stats().slow_tasks, 1);
+}
+
+#[test]
+fn no_task_is_timed_while_the_limit_is_zero() {
+    let clock = Arc::new(ManualClock::default());
+    let (mut worker, shared) = worker_with(clock.clone(), true);
+    let _slow = spawn_local(Busy {
+        clock,
+        busy_us: 1_000_000,
+        polls: 0,
+    });
+    settle(&mut worker);
+    assert_eq!(shared.stats().slow_tasks, 0);
 }
 
 #[test]

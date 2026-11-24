@@ -40,6 +40,9 @@ impl Delivery {
         peer: EndpointId,
         up: bool,
     ) -> Result<(), Closed> {
+        if super::app_topics::is_app_topic(topic) {
+            return Ok(());
+        }
         let peer_id = endpoint_id_to_peer_id(&peer);
         let topic = topic.to_string();
         let event = if up {
@@ -60,6 +63,10 @@ impl Delivery {
         };
         if topic == RECORDS_TOPIC {
             self.records.push(RecordsInput::Announced(msg.content));
+            return Ok(());
+        }
+        // An embedder's topic: never Defra's to read, subscribed or not.
+        if super::app_topics::is_app_topic(topic) {
             return Ok(());
         }
         let sender_peer_id = endpoint_id_to_peer_id(&msg.delivered_from);

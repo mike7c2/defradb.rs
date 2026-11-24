@@ -12,6 +12,8 @@
 mod addr;
 #[cfg(test)]
 mod allowlist_tests;
+#[cfg(test)]
+mod app_topic_tests;
 mod command;
 mod config;
 mod direct_push;
@@ -60,6 +62,10 @@ pub use endpoint::{spawn_endpoint, spawn_endpoint_with_protocols};
 pub use endpoint_config::{AdmissionAuthority, IrohEndpointConfig};
 pub use endpoint_streams::{
     RESET_BUSY, RESET_MESSAGE_TOO_LARGE, RESET_STALLED, RESET_UNKNOWN_SERVICE,
+};
+pub use gossip::{
+    AppMessage, AppSubscription, APP_TOPIC_BUFFER, APP_TOPIC_PREFIX, MAX_APP_PAYLOAD,
+    MAX_APP_TOPIC_LEN,
 };
 pub use inbound_budget::peer_share_bytes;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]

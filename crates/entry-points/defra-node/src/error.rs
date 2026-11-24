@@ -365,6 +365,10 @@ pub enum Error {
     #[cfg(feature = "p2p")]
     #[error("stream protocols require the iroh transport")]
     StreamProtocolsNeedIroh,
+    /// An application topic was used on a node whose transport is not iroh.
+    #[cfg(feature = "p2p")]
+    #[error("application topics require the iroh transport")]
+    AppTopicsNeedIroh,
     /// The P2P assembly did not finish on the network runtime.
     #[cfg(feature = "libp2p")]
     #[error("P2P setup did not finish on the network runtime: {0}")]

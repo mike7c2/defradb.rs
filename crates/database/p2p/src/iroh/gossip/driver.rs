@@ -27,12 +27,15 @@ use tracing::{debug, warn};
 use crate::error::{Error, Result};
 use crate::transport::PeerAddr;
 
+use super::app_topics::{AppSubscription, Subscriber};
 use super::delivery::{Closed, Delivery};
 use super::frame::{
     encode_gossip_frame, read_gossip_frame, ProtoMessage, FRAME_LIMIT, MAX_MESSAGE_SIZE,
 };
 use super::inbox::Inbox;
 use super::{protocols, spawn_task, topic_id, AddrInfo, Input, Network, SpawnedTasks, Subscribed};
+use crate::iroh::command::Reply;
+use crate::iroh::endpoint_config::PeerAdmission;
 use crate::iroh::mailbox::{Mailbox, Wake};
 
 /// Messages queued for one peer's stream before more are dropped.
@@ -65,6 +68,7 @@ pub(super) struct Driver<N> {
     timers: TimerMap<proto::Timer<EndpointId>>,
     queued: VecDeque<InEvent<EndpointId>>,
     topics: RapidHashMap<TopicId, Joined>,
+    apps: RapidHashMap<TopicId, Subscriber>,
     peers: RapidHashMap<EndpointId, Peer>,
     learned: RapidHashMap<EndpointId, Vec<PeerAddr>>,
     deferred: Vec<Deferred>,
@@ -150,6 +154,7 @@ where
             timers: TimerMap::new(),
             queued: VecDeque::new(),
             topics: RapidHashMap::new(),
+            apps: RapidHashMap::new(),
             peers: RapidHashMap::new(),
             learned: RapidHashMap::new(),
             deferred: Vec::new(),
@@ -206,6 +211,17 @@ where
         match input {
             Input::Join(name) => self.join(name, false),
             Input::Quit(name) => self.quit(topic_id(&name)),
+            Input::AppJoin {
+                topic,
+                admission,
+                reply,
+            } => self.app_join(topic, admission, reply),
+            Input::AppQuit(name) => {
+                let id = topic_id(&name);
+                if self.apps.remove(&id).is_some() {
+                    self.quit(id);
+                }
+            }
             Input::Hint { topic, peers } => self.hint(topic, peers),
             Input::Publish {
                 topic,
@@ -302,6 +318,26 @@ where
             .push_back(InEvent::Command(id, Command::Join(bootstrap)));
     }
 
+    /// One subscription per application topic. A subscription the caller no
+    /// longer waits for is dropped here, and its drop leaves the topic.
+    fn app_join(
+        &mut self,
+        name: String,
+        admission: Arc<PeerAdmission>,
+        reply: Reply<AppSubscription>,
+    ) {
+        let id = topic_id(&name);
+        if self.apps.contains_key(&id) {
+            let _ = reply.send(Err(Error::AppTopicSubscribed(name)));
+            return;
+        }
+        let (subscriber, subscription) =
+            Subscriber::new(name.clone(), admission, Arc::clone(&self.io.inbox));
+        self.apps.insert(id, subscriber);
+        self.join(name, false);
+        let _ = reply.send(Ok(subscription));
+    }
+
     fn hint(&mut self, name: String, peers: Vec<EndpointId>) {
         let id = topic_id(&name);
         if !self.topics.contains_key(&id) {
@@ -396,6 +432,11 @@ where
                 if let Some(neighbors) = neighbors {
                     neighbors.remove(&peer);
                     self.delivery.neighbor(&name, peer, false).await?;
+                }
+            }
+            Event::Received(message) if self.apps.contains_key(&id) => {
+                if let Some(subscriber) = self.apps.get(&id) {
+                    subscriber.deliver(&name, &message.content);
                 }
             }
             event @ Event::Received(_) if neighbors.is_some() => {

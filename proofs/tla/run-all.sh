@@ -511,6 +511,8 @@ RUNS=(
   "MC_RetryMarkerGeneration_Red_UnboundedReads.cfg RetryMarkerGeneration.tla RED" # every tick loads every marker before asking whether the peer is due (INV_SweepReadsBounded)
   "MC_RetryMarkerGeneration_Red_KeepVanished.cfg RetryMarkerGeneration.tla RED" # a purged document's marker errors on every replay and is never discharged (LIVE_VanishedMarkerDischarged)
   "MC_RetryMarkerGeneration_Red_NoRotation.cfg RetryMarkerGeneration.tla RED" # a failing head marker is replayed first forever and the tail is never reached (LIVE_VanishedMarkerDischarged)
+  "MC_RetryPeerSchedule_Green.cfg RetryPeerSchedule.tla GREEN" # an ack or clear that found no marker validates its scan, so a registration committed meanwhile keeps the peer's schedule row
+  "MC_RetryPeerSchedule_Red_PlainScan.cfg RetryPeerSchedule.tla RED" # a plain scan misses that registration and the ack deletes the row: a marker with no schedule (INV_EveryMarkerScheduled)
   "MC_RetryPushAdmission_Green.cfg RetryPushAdmission.tla GREEN"
   "MC_RetryPushAdmission_Red_NoPresence.cfg RetryPushAdmission.tla RED"
   "MC_RetryPushAdmission_Red_NoGeneration.cfg RetryPushAdmission.tla RED"
