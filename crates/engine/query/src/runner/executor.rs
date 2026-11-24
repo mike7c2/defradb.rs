@@ -920,7 +920,9 @@ impl<F: DocFetcher + 'static, R: TransactionRegistry> QueryRunner<F, R> {
             })
             .await
             .map_err(crate::error::QueryError::execution)?;
-        Ok(std::sync::Arc::from(b"ok".as_slice()))
+        Ok(std::sync::Arc::from(
+            crate::access_hooks::write::WRITE_ALLOWED,
+        ))
     }
 
     pub(super) async fn resolve_acp_decision_input(

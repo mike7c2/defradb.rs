@@ -411,8 +411,9 @@ same revision as Cargo.lock rather than copied into this repository. DefraDB's
 once keys and reopen through the adapter.
 
 `RetryPreparedInputs.tla` models exact-context provider answers resolved outside
-an attempt and reused after a commit conflict; its RED cases run provider work
-inside an attempt or clear the memo and repeat provider work. It does not establish that every remote ACP/Vera/KMS/decrypt call
+an attempt, the answers preparation gets kept for the attempts, and answers
+reused after a commit conflict; its RED cases run provider work inside an
+attempt, clear the memo, or drop preparation's answer, and repeat provider work. It does not establish that every remote ACP/Vera/KMS/decrypt call
 is lifted out of retry attempts. `RetryMarkerGeneration.tla` models generation
 compare-delete and the peer-incarnation fence on clear across forget/re-add,
 and the sweep over several scopes: a tick reads one probe and at most one page
