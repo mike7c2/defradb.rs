@@ -170,13 +170,19 @@ pub fn filter_to_index_scan(
                 && matches!(cond.value, ConditionValue::Single(_))
         })
         .map(|cond| cond.json_path.clone());
+    // A full scan reads one path. A bare `_nin` passes a document missing its
+    // path, which has no entry there, so it chooses only when nothing else can.
+    let full_scan_at = first_field_conditions
+        .iter()
+        .position(|cond| is_full_scan(cond) && !accepts_missing(cond))
+        .or_else(|| first_field_conditions.iter().position(is_full_scan));
     // The `_all` paths behind each kind of scan, whose empty arrays it must add.
     let mut eq_all = None;
     let mut in_all = None;
     let mut range_all = None;
     let mut scan_all_all = None;
 
-    for cond in &first_field_conditions {
+    for (at, cond) in first_field_conditions.iter().enumerate() {
         // Skip _none operators (they don't use index)
         if cond.array_op == Some(FilterOp::None) {
             continue;
@@ -227,7 +233,7 @@ pub fn filter_to_index_scan(
                     range_all = range_all.or(all_path(cond));
                 }
             }
-            // The first condition pins the scan path, so its value filter and
+            // One condition pins the scan path, so its value filter and
             // empty-array lookup read the same path; the filter checks the others.
             FilterOp::Ne
             | FilterOp::Nin
@@ -235,7 +241,7 @@ pub fn filter_to_index_scan(
             | FilterOp::Nlike
             | FilterOp::Ilike
             | FilterOp::Nilike
-                if has_scan_all => {}
+                if full_scan_at != Some(at) => {}
             // _ne/_nin/_like/_nlike use full index scan with post-filtering (matches Go behavior)
             // For JSON fields, we still need to track the path to constrain the scan
             FilterOp::Ne | FilterOp::Nin => {
@@ -669,6 +675,25 @@ fn full_field_range(reverse: bool) -> IndexScanType {
         upper: Bound::Unbounded,
         reverse,
     }
+}
+
+/// A condition served by a scan of every entry at its path.
+fn is_full_scan(cond: &super::types::FieldCondition) -> bool {
+    cond.array_op != Some(FilterOp::None)
+        && matches!(
+            cond.op,
+            FilterOp::Ne
+                | FilterOp::Nin
+                | FilterOp::Like
+                | FilterOp::Nlike
+                | FilterOp::Ilike
+                | FilterOp::Nilike
+        )
+}
+
+/// A `_nin` outside an array operator, which a missing property passes.
+fn accepts_missing(cond: &super::types::FieldCondition) -> bool {
+    cond.op == FilterOp::Nin && cond.array_op.is_none()
 }
 
 /// The array path of an `_all` condition: `None` for any other condition.
