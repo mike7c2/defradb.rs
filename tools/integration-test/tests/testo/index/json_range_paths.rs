@@ -99,3 +99,59 @@ fn like_and_ne_on_two_paths() {
         &["Both"],
     );
 }
+
+#[test]
+#[mantra_macros::req_test("defra.index.json_range_paths")]
+fn a_range_and_like_on_two_paths() {
+    run(
+        &[
+            json!({ "name": "Both", "custom": { "a": 15, "b": "xa" } }),
+            json!({ "name": "Unlike", "custom": { "a": 15, "b": "ya" } }),
+            json!({ "name": "Low", "custom": { "a": 1, "b": "xa" } }),
+        ],
+        "{custom: {a: {_gt: 10}, b: {_like: \"x%\"}}}",
+        &["Both"],
+    );
+}
+
+#[test]
+#[mantra_macros::req_test("defra.index.json_range_paths")]
+fn like_and_a_range_on_two_paths() {
+    run(
+        &[
+            json!({ "name": "Both", "custom": { "a": "xa", "b": 15 } }),
+            json!({ "name": "Unlike", "custom": { "a": "ya", "b": 15 } }),
+            json!({ "name": "Low", "custom": { "a": "xa", "b": 1 } }),
+        ],
+        "{custom: {a: {_like: \"x%\"}, b: {_gt: 10}}}",
+        &["Both"],
+    );
+}
+
+#[test]
+#[mantra_macros::req_test("defra.index.json_range_paths")]
+fn eq_and_like_on_two_paths() {
+    run(
+        &[
+            json!({ "name": "Both", "custom": { "a": 15, "b": "xa" } }),
+            json!({ "name": "Unlike", "custom": { "a": 15, "b": "ya" } }),
+            json!({ "name": "Other", "custom": { "a": 1, "b": "xa" } }),
+        ],
+        "{custom: {a: {_eq: 15}, b: {_like: \"x%\"}}}",
+        &["Both"],
+    );
+}
+
+#[test]
+#[mantra_macros::req_test("defra.index.json_range_paths")]
+fn a_range_and_like_on_one_path() {
+    run(
+        &[
+            json!({ "name": "Both", "custom": { "a": "xb" } }),
+            json!({ "name": "Unlike", "custom": { "a": "yb" } }),
+            json!({ "name": "Low", "custom": { "a": "xa" } }),
+        ],
+        "{custom: {a: {_gt: \"xa\", _like: \"x%\"}}}",
+        &["Both"],
+    );
+}
