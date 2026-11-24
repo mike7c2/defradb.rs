@@ -204,6 +204,11 @@ impl RegolithStore {
         &self.inner.path
     }
 
+    /// The engine's database, for what it reports about itself.
+    pub(super) fn engine_db(&self) -> &regolith::Db {
+        self.inner.db.db()
+    }
+
     /// The engine, for tests that reach under the adapter.
     #[cfg(test)]
     pub(super) fn engine(&self) -> &OptimisticTransactionDb {
