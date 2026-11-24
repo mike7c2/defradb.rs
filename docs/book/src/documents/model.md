@@ -34,7 +34,7 @@ backup import and the store-upgrade re-key of legacy documents (below). Requirem
 | P2P merge | the creator's response | the peer keeps a block only when it hashes to the CID it arrived under (`verify_block_cid` on a replicator push, gossip, block sync and CAR fetch; `verify_hash` on a bitswap fetch) and derives the ID from that CID | `signature::doc_id_determinism::a_peer_shows_the_creators_doc_id`, `signature::peer::*` |
 | Lens migration | unchanged | a migration rewrites field values, never the genesis, so the document is read under its ID | `collection_version::migrations::query::with_doc_id::collection_migration_query_by_doc_id` (unsigned) |
 | Store-upgrade re-key | not kept for a legacy ID | `resolve_legacy_identities` maps a legacy document to its genesis's ID; a stored ID that differs becomes an alias | none: no legacy-store fixture |
-| Backup import | not kept | a new create under a new ID; the file's ID becomes an alias | `backup::simple::import_alias::*` |
+| Backup import | kept only when the same genesis is rebuilt | a new create under its genesis's ID; a file ID that differs becomes an alias | `backup::simple::import_alias::*` |
 
 The HTTP guarantee is the client's. The server's websocket signer (`SessionSigner`)
 checks each signature against the session key and compares no ID, so a websocket
@@ -77,7 +77,10 @@ check of `execute_verified_graph_in_txn` or of the Rust client's signing convers
 
 There are two documented exceptions. Backup import is a stopgap: it creates each
 document again on the importing node, so the document gets its new genesis's ID, and
-the ID the file names is kept as an alias of it (`set_doc_id_alias`). An ID-preserving
+the ID the file names is kept as an alias of it (`set_doc_id_alias`). The ID is the
+file's again only when the importing node rebuilds the same genesis: the same signing
+key with a signer that ignores its nonce (or no signing), the same collection version
+and the same field values; then there is no alias to keep. An ID-preserving
 migration built on collection configuration and the document DAG is meant to replace
 it. The store-upgrade re-key (`resolve_legacy_identities` in
 `crates/database/db/src/definition/migration/shortid.rs`, run on every open) maps each
