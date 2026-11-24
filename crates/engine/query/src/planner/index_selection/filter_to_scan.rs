@@ -225,18 +225,15 @@ pub fn filter_to_index_scan(
                     range_all = range_all.or(all_path(cond));
                 }
             }
-            // The first `_all` pins the scan path, so its empty-array lookup
-            // reads the same path; the filter checks the others.
+            // The first condition pins the scan path, so its value filter and
+            // empty-array lookup read the same path; the filter checks the others.
             FilterOp::Ne
             | FilterOp::Nin
             | FilterOp::Like
             | FilterOp::Nlike
             | FilterOp::Ilike
             | FilterOp::Nilike
-                if scan_all_all.is_some() =>
-            {
-                has_scan_all = true;
-            }
+                if has_scan_all => {}
             // _ne/_nin/_like/_nlike use full index scan with post-filtering (matches Go behavior)
             // For JSON fields, we still need to track the path to constrain the scan
             FilterOp::Ne | FilterOp::Nin => {
