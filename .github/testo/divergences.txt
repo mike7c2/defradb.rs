@@ -35,6 +35,8 @@ testo index::query_with_relation_tie_order::ties_follow_the_second_condition_wit
 testo index::json_range_paths::a_range_and_ne_on_two_paths
 testo index::json_range_paths::ranges_on_two_paths
 testo index::json_range_paths::all_ranges_on_two_paths
+# Go refuses `_ne` on a JSON field; Rust tests a `_like` pattern only at its own path and returns the match.
+testo index::json_range_paths::like_and_ne_on_two_paths
 # Go's JSON index has no entry for an empty array, and Go refuses `_ne` on a JSON field; Rust finds the empty arrays at either path, as without the index.
 testo index::empty_array::like_under_all_on_two_json_paths_finds_the_empty_array
 testo index::empty_array::ne_under_all_on_two_json_paths_finds_the_empty_array

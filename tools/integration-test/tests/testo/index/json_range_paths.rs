@@ -85,3 +85,17 @@ fn two_bounds_on_one_path_still_narrow() {
         &["In"],
     );
 }
+
+#[test]
+#[mantra_macros::req_test("defra.index.json_range_paths")]
+fn like_and_ne_on_two_paths() {
+    run(
+        &[
+            json!({ "name": "Both", "custom": { "a": "xa", "b": 5 } }),
+            json!({ "name": "Equal", "custom": { "a": "xa", "b": 25 } }),
+            json!({ "name": "Unlike", "custom": { "a": "ya", "b": 5 } }),
+        ],
+        "{custom: {a: {_like: \"x%\"}, b: {_ne: 25}}}",
+        &["Both"],
+    );
+}

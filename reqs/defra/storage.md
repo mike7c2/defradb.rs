@@ -53,9 +53,9 @@ An indexed `[]`, in a typed array field or at any path of a JSON field, is store
 # `defra.index.json_range_paths`: Range conditions on two JSON paths each keep their path
 
 - **Parents:** ["defra.index"]
-- **Scenarios:** ["index::json_range_paths::ranges_on_two_paths", "index::json_range_paths::all_ranges_on_two_paths", "index::json_range_paths::a_range_and_ne_on_two_paths", "index::json_range_paths::two_bounds_on_one_path_still_narrow"]
+- **Scenarios:** ["index::json_range_paths::ranges_on_two_paths", "index::json_range_paths::all_ranges_on_two_paths", "index::json_range_paths::a_range_and_ne_on_two_paths", "index::json_range_paths::two_bounds_on_one_path_still_narrow", "index::json_range_paths::like_and_ne_on_two_paths"]
 
-On `custom: JSON @index`, `{custom: {a: {_gt: 10}, b: {_lt: 20}}}` returns `{"a": 30, "b": 5}`, the same holds under `_all` for `{"a": [30], "b": [5]}`, and `{a: {_gt: 10}, b: {_ne: 25}}` returns it too. A bound is never applied at a path other than its own: when the range conditions name different paths, the index scan keeps one path and leaves the other to the filter. Two bounds on one path, `{a: {_gt: 10, _lt: 20}}`, still narrow the scan to that range.
+On `custom: JSON @index`, `{custom: {a: {_gt: 10}, b: {_lt: 20}}}` returns `{"a": 30, "b": 5}`, the same holds under `_all` for `{"a": [30], "b": [5]}`, and `{a: {_gt: 10}, b: {_ne: 25}}` returns it too. A bound is never applied at a path other than its own: when the range conditions name different paths, the index scan keeps one path and leaves the other to the filter. Two bounds on one path, `{a: {_gt: 10, _lt: 20}}`, still narrow the scan to that range. A `_like` pattern is never tested at another path either: `{a: {_like: "x%"}, b: {_ne: 25}}` returns `{"a": "xa", "b": 5}`, because the full scan reads the path of its first `_ne`, `_nin` or `_like`-family condition with that condition's pattern, and the filter checks the rest.
 
 # `defra.index.json_descending_path`: A descending JSON index keeps its paths ascending
 
