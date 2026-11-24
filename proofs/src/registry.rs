@@ -2877,8 +2877,9 @@ pub const PROPERTIES: &[Property] = &[
     Property {
         // proofs/lean/Cid/SignedGenesis.lean: node_commits_precomputed,
         // client_signed_commits_precomputed and peer_commits_creators_id with
-        // their RED theorems, the rekey and import exceptions, the
-        // signature-reach and determinism theorems, collision_refused, and the
+        // their RED theorems, node_recompute_after_schema_change_moves_id (the
+        // node promise holds only on the prepared schema), the rekey and import
+        // exceptions, the signature-reach and determinism theorems, collision_refused, and the
         // RED resign_after_encode_breaks_doc_id.
         family: "CID content-addressing determinism + Block canonicalization",
         name: "node_commits_precomputed, client_signed_commits_precomputed, peer_commits_creators_id — a signed create commits the DocID its creator computed",

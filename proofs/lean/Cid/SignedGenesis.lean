@@ -18,7 +18,7 @@ genesis it holds, and this file proves, for the node, client-signed and peer
 paths, which check makes that genesis the creator's; a RED theorem beside
 each shows the ID moving once the check is gone. It shows the two
 exceptions: backup import re-creates the document under a new genesis, so a
-new ID, and the store-upgrade re-key moves a legacy document whose stored ID
+new ID whenever another key signs it, and the store-upgrade re-key moves a legacy document whose stored ID
 is not its genesis's ID to that ID, keeping the old one as an alias. A lens
 migration rewrites field values and never a genesis, so it is no path here.
 It also proves that both kinds of signature reach
@@ -44,7 +44,8 @@ Rust owners:
   (the Rust client refuses an out-of-graph wave and a different `_docID`).
 * crates/database/db/src/write/prepare.rs `PreparedCreateBlocks` and
   crates/database/db/src/write/create.rs `compute` (an attempt reuses the
-  prepared blocks when the schema and short ID still match).
+  prepared blocks when the schema and short ID still match; after a schema
+  change it recomputes on the current schema and commits that ID).
 * crates/database/db/src/merge/merge_handler/doc_identity.rs
   `resolve_composite_doc_id` (a peer derives the ID from the genesis CID),
   and the hash check on each way a block arrives, which keeps a block only
@@ -278,65 +279,110 @@ theorem different_genesis_different_id (w : World)
   fun heq => h (hC _ _ (hId _ _ heq))
 
 -- A node-signed commit attempt (autocommit or explicit transaction).
--- `prepare` computed the blocks with nonce `n` before the transaction
--- (`PreparedCreateBlocks`, write/prepare.rs). The attempt, in
+-- `prepare` computed the blocks with nonce `n` against the schema current at
+-- that time (`PreparedCreateBlocks`, write/prepare.rs). The attempt, in
 -- `create::compute` (write/create.rs), reuses them when the schema and short
--- ID still match; otherwise it computes them again, signing again with the
--- nonce `retryNonce`.
+-- ID still match; otherwise it computes them again against the schema current
+-- now, signing again with the nonce `retryNonce`. A changed schema can change
+-- the collection version and the field blocks, so both are part of the attempt.
 structure NodeAttempt where
   -- `create::compute` found matching prepared blocks and reused them.
   reusesPrepared : Bool
   -- The nonce a recomputation draws.
   retryNonce : Nonce
+  -- The collection version ID the current schema gives a recomputation.
+  currentVersion : Nat
+  -- The field blocks the current schema gives a recomputation.
+  currentFields : List FieldBlock
+
+-- The attempt recomputes against the same schema the prepared blocks used:
+-- the same collection version and the same field blocks.
+def NodeAttempt.sameSchema (a : NodeAttempt) (version : Nat)
+    (fields : List FieldBlock) : Prop :=
+  -- Both schema-dependent inputs are the prepared ones.
+  a.currentVersion = version ∧ a.currentFields = fields
 
 -- The ID a node attempt commits: `persist` keys the document by the ID of the
 -- blocks it inserts, and the response names that same ID.
 def nodeCommitted (w : World) (k : Key) (n : Nonce) (version : Nat)
     (fields : List FieldBlock) (a : NodeAttempt) : DocId :=
-  -- Reused blocks keep the prepared nonce; recomputed ones use the new one.
-  precommitId w k (if a.reusesPrepared then n else a.retryNonce) version fields
+  -- Reused blocks keep the prepared nonce and schema; recomputed ones use the
+  -- new nonce and the current schema's version and fields.
+  if a.reusesPrepared then precommitId w k n version fields
+  else precommitId w k a.retryNonce a.currentVersion a.currentFields
 
 -- Promise: a node attempt commits the prepared ID when it reuses the prepared
--- blocks, or when the signer ignores its nonce (Ed25519, Secp256k1).
+-- blocks, or when it recomputes against the same schema with a signer that
+-- ignores its nonce (Ed25519, Secp256k1). A recomputation after a schema
+-- change is not covered: it commits the ID of the blocks the current schema
+-- gives, which `node_recompute_after_schema_change_moves_id` shows can differ.
 theorem node_commits_precomputed (w : World) (k : Key) (n : Nonce) (version : Nat)
     (fields : List FieldBlock) (a : NodeAttempt)
-    (h : a.reusesPrepared = true ∨ ∀ k p n n', w.sign k p n = w.sign k p n') :
+    (h : a.reusesPrepared = true ∨
+      (a.sameSchema version fields ∧ ∀ k p n n', w.sign k p n = w.sign k p n')) :
     nodeCommitted w k n version fields a = precommitId w k n version fields := by
   -- Split on whether the attempt reused the prepared blocks.
   cases hr : a.reusesPrepared with
-  -- Reused: the same nonce, so the same genesis.
+  -- Reused: the same nonce and schema, so the same genesis.
   | true => simp [nodeCommitted, hr]
-  -- Recomputed: only a nonce-free signer keeps the ID.
+  -- Recomputed: only the same schema with a nonce-free signer keeps the ID.
   | false =>
-      -- The premise must then be the nonce-free signer.
-      have hdet : ∀ k p n n', w.sign k p n = w.sign k p n' := by
+      -- The premise must then be the same schema and a nonce-free signer.
+      have hs : a.sameSchema version fields ∧ ∀ k p n n', w.sign k p n = w.sign k p n' := by
         -- The reuse branch of `h` contradicts `hr`.
         cases h with
         -- Reuse claimed, but the attempt recomputed.
         | inl hreuse => simp [hr] at hreuse
-        -- The signer ignores its nonce.
+        -- The same schema and a signer that ignores its nonce.
         | inr hd => exact hd
-      -- Unfold the attempt: it signs with the retry nonce.
-      simp only [nodeCommitted, hr]
+      -- Name the two schema equalities and the signer's determinism.
+      obtain ⟨⟨hv, hf⟩, hdet⟩ := hs
+      -- Unfold the attempt: it signs with the retry nonce on the current schema,
+      -- which is the prepared one.
+      simp only [nodeCommitted, hr, hv, hf]
       -- A nonce-free signer gives the same ID under either nonce.
       exact (nonce_independent_signer_same_doc_id w hdet k n a.retryNonce version fields).symm
 
 -- RED: an attempt that recomputes with a signer whose composite signature
 -- depends on its nonce (randomized ECDSA) commits an ID other than the
--- prepared one. Removing the reuse in `create::compute` plants this bug for
--- such a signer.
+-- prepared one, even on the same schema. Removing the reuse in
+-- `create::compute` plants this bug for such a signer.
 theorem node_recompute_with_random_signer_moves_id (w : World)
     (hC : Injective w.addrC) (hId : Injective w.docIdOf) (hS : Injective w.addrS)
     (k : Key) (n : Nonce) (version : Nat) (fields : List FieldBlock) (a : NodeAttempt)
-    (hr : a.reusesPrepared = false)
+    (hr : a.reusesPrepared = false) (hsame : a.sameSchema version fields)
     (hfields : ∀ b, signField w k n b = signField w k a.retryNonce b)
     (hdiff : ∀ c, w.sign k (.composite c) n ≠ w.sign k (.composite c) a.retryNonce) :
     nodeCommitted w k n version fields a ≠ precommitId w k n version fields := by
-  -- The attempt signs with the retry nonce.
-  simp only [nodeCommitted, hr]
+  -- Name the two schema equalities.
+  obtain ⟨hv, hf⟩ := hsame
+  -- The attempt signs with the retry nonce on the prepared schema.
+  simp only [nodeCommitted, hr, hv, hf]
   -- Two nonces give two composite signatures, so two IDs.
   exact fun heq => nonce_dependent_signer_can_differ w hC hId hS k n a.retryNonce
     version fields hfields hdiff heq.symm
+
+-- Not a guard but the limit of the promise: a recomputation after the schema
+-- moved to another collection version commits another ID, whatever the signer,
+-- because the genesis names the version. The response and the stored document
+-- both carry that new ID; only the prepared one is left behind.
+theorem node_recompute_after_schema_change_moves_id (w : World)
+    (hC : Injective w.addrC) (hId : Injective w.docIdOf)
+    (k : Key) (n : Nonce) (version : Nat) (fields : List FieldBlock) (a : NodeAttempt)
+    (hr : a.reusesPrepared = false) (hv : a.currentVersion ≠ version) :
+    nodeCommitted w k n version fields a ≠ precommitId w k n version fields := by
+  -- Suppose the two IDs were equal.
+  intro heq
+  -- The attempt recomputed, so it built its genesis on the current schema.
+  simp only [nodeCommitted, hr] at heq
+  -- Equal IDs mean equal genesis blocks, so equal collection versions.
+  have hblock := hC _ _ (hId _ _ heq)
+  -- Each genesis names the version it was built on.
+  have hver := congrArg Composite.version hblock
+  -- Unfold both versions.
+  simp only [genesis] at hver
+  -- That contradicts the schema having moved.
+  exact hv hver
 
 -- A client-signed create: the node rebuilds the genesis from the client's
 -- signatures (`ExactSignatures::sign_sync` refuses any other block, so the
