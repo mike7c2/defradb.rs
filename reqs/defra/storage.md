@@ -57,6 +57,13 @@ On `custom: JSON @index`, `{custom: {a: {_gt: 10}, b: {_lt: 20}}}` returns `{"a"
 
 On a JSON index with `direction: DESC`, each key holds its path in ascending bytes and only the value inverted, as Go's `EncodeJSONDescending` writes it. `_any` on a top-level or nested array, a range on its elements, and a scan of every entry return the matching documents instead of failing with `invalid escape sequence in descending path` (issue #3143). Each property step starts with the bytes marker, as in Go, so no property step reads as an array step. That marker changes ascending JSON keys too, so opening a store written with the older layout rebuilds every index, ascending and descending.
 
+# `defra.index.backfill_under_writes`: An index created under writes finishes its backfill
+
+- **Parents:** ["defra.index"]
+- **Scenarios:** ["index::backfill_under_writes::an_index_created_under_updates_is_built_and_used", "db::index::create::index_backfill_finishes_when_the_cache_lags_the_stored_definition"]
+
+An index created while documents of its collection are updated is built: its backfill completes, the listing shows no failed backfill, and a filter on the indexed field fetches through the index, for a value an update wrote during the build as for an untouched one. The backfill identifies its index by ID in the definition it reads from the store, so a node whose collection cache is behind the committed index definition still completes it and never fails with `index '<name>' disappeared during backfill`.
+
 # `defra.collection`: Collection-wide operations
 
 - **Parents:** ["defra"]
