@@ -149,6 +149,7 @@ fn a_write_is_not_resent_after_a_status_that_may_follow_its_commit() {
         StatusCode::REQUEST_TIMEOUT,
         StatusCode::INTERNAL_SERVER_ERROR,
         StatusCode::BAD_GATEWAY,
+        StatusCode::SERVICE_UNAVAILABLE,
         StatusCode::GATEWAY_TIMEOUT,
     ] {
         assert!(HttpClient::may_resend("GET", status), "{status}");
@@ -156,12 +157,10 @@ fn a_write_is_not_resent_after_a_status_that_may_follow_its_commit() {
             assert!(!HttpClient::may_resend(method, status), "{method} {status}");
         }
     }
-    for status in [
-        StatusCode::TOO_MANY_REQUESTS,
-        StatusCode::SERVICE_UNAVAILABLE,
-    ] {
-        assert!(HttpClient::may_resend("POST", status), "{status}");
-    }
+    assert!(HttpClient::may_resend(
+        "POST",
+        StatusCode::TOO_MANY_REQUESTS
+    ));
 }
 
 /// A server on `127.0.0.1` that answers every request with `reply`, or closes
@@ -262,8 +261,8 @@ fn a_commit_with_no_readable_answer_is_sent_once_and_indeterminate() {
         ),
         (
             reply("503 Service Unavailable", r#"{"error":"busy"}"#),
-            None,
-            4,
+            indeterminate,
+            1,
             "server returned error: busy",
         ),
         (None, indeterminate, 1, "HTTP request failed:"),
