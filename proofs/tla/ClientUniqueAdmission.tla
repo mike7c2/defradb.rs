@@ -27,17 +27,23 @@
 \*     the writer's value, or a conflict when no other committed document
 \*     holds a value the client read or wrote;
 \*   - without the index, anyone is refused;
-\*   - a client writing nil is refused.
+\*   - a client writing nil is refused over nil: it may lose its commit only
+\*     over a non-nil value its filter read (the known defect below).
 \*
 \* What the code does today and the house rules forbid: a query read is never
 \* a decision (AGENTS.md, Reads and writes), yet the unique-index equality plan
 \* reads the entry with a validated get
 \* (crates/engine/storage/src/index/eq_iterator.rs ExactMatchIterator::new_unique,
 \* its `txn.get`). So an explicit transaction that only filtered for a value
-\* it does not write loses its commit when another writer adds that value. INV_RefusedOnlyOverItsOwnValue states the rule; the RED
-\* configuration MC_ClientUniqueAdmission_Red_FilterReadDecides shows the code
-\* breaks it, and testo txn::unique_isolation
-\* known_defect_a_unique_filter_read_aborts_the_commit pins the same answer.
+\* it does not write loses its commit when another writer adds that value,
+\* and that holds for a client writing nil too. A filter for nil is a prefix
+\* scan of the doc-suffixed nil entries, which decides nothing.
+\* INV_RefusedOnlyOverItsOwnValue states the rule; the RED configurations
+\* MC_ClientUniqueAdmission_Red_FilterReadDecides and
+\* MC_ClientUniqueAdmission_Red_FilterReadDecidesNil show the code breaks it,
+\* and testo txn::unique_isolation
+\* known_defect_a_unique_filter_read_aborts_the_commit and
+\* known_defect_a_nil_writers_filter_read_aborts_the_commit pin the same answers.
 \*
 \* Code it models:
 \*   crates/engine/storage/src/index/unique.rs UniqueIndex::save, the `has`
@@ -146,7 +152,8 @@ Init ==
   /\ seq = 0
 
 \* An attempt begins: it takes a snapshot at the newest commit and has
-\* validated nothing yet. A client writing nil runs no filtered read.
+\* validated nothing yet. Every client, nil writers included, runs its
+\* filtered read next.
 Begin(c) ==
   /\ pc[c] = "begin"
   /\ attempts[c] < MaxAttempts
@@ -154,16 +161,21 @@ Begin(c) ==
   /\ attempts' = [attempts EXCEPT ![c] = @ + 1]
   /\ checked' = [checked EXCEPT ![c] = FALSE]
   /\ scanned' = [scanned EXCEPT ![c] = FALSE]
-  /\ pc' = [pc EXCEPT ![c] = IF input[c] = Nil THEN "check" ELSE "filter"]
-  /\ UNCHANGED <<input, wanted,reason, docs, entries, lastWrite, seq>>
+  /\ pc' = [pc EXCEPT ![c] = "filter"]
+  /\ UNCHANGED <<input, wanted, reason, docs, entries, lastWrite, seq>>
 
-\* The filtered read, for value wanted[c]. Served by the unique index, whether
-\* it is validated depends on the plan, so both are explored: today the
-\* equality plan validates it (a known defect) and a full scan does not. Without an index it is a plain
-\* scan, validated only under the ScanDecides bug.
+\* The filtered read, for value wanted[c]. For a non-nil value served by the
+\* unique index, whether it is validated depends on the plan, so both are
+\* explored: today the equality plan validates it with a `get` (a known
+\* defect) and a full scan does not. A filter for nil is a prefix scan
+\* (ExactMatchIterator::new_unique, its `has_nil` branch), and without an
+\* index the read is a plain scan; both are validated only under the
+\* ScanDecides bug.
 Filter(c) ==
   /\ pc[c] = "filter"
-  /\ \E validated \in (IF Indexed THEN BOOLEAN ELSE {ScanDecides}) :
+  \* the plans this read may take: validated or not under the index's
+  \* equality lookup, otherwise a scan validated only under the bug
+  /\ \E validated \in (IF Indexed /\ wanted[c] # Nil THEN BOOLEAN ELSE {ScanDecides}) :
        scanned' = [scanned EXCEPT ![c] = validated]
   /\ pc' = [pc EXCEPT ![c] = "check"]
   /\ UNCHANGED <<input, wanted,snap, attempts, checked, reason, docs, entries, lastWrite, seq>>
@@ -276,6 +288,14 @@ INV_RefusedOnlyOverItsOwnValue ==
 \* Without the index, nobody is refused.
 INV_NoIndexNotRefused == ~Indexed => \A c \in Clients : pc[c] # "refused"
 
-\* A client writing nil is never refused.
-INV_NilNotRefused == \A c \in Clients : input[c] = Nil => pc[c] # "refused"
+\* A client writing nil is never refused over nil: if it is refused at all,
+\* it lost its commit over a non-nil value its filter read, which another
+\* client committed.
+INV_NilNotRefused ==
+  \A c \in Clients : (input[c] = Nil /\ pc[c] = "refused") =>
+    \* never a unique violation, which nil cannot be
+    /\ reason[c] = "TxnConflict"
+    \* the value it lost over is the non-nil one it read
+    /\ wanted[c] # Nil
+    /\ \E d \in docs \ {c} : input[d] = wanted[c]
 ====

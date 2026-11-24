@@ -31,7 +31,10 @@ modeled by `proofs/tla/ClientUniqueAdmission.tla`; the words and codes by
 ## Scope
 
 - **Non-nil values only.** A nil value is never checked: its entry key carries the DocID,
-  so any number of documents may hold nil (verified: `nil_values_are_not_refused`).
+  so any number of documents may hold nil (verified: `nil_values_are_not_refused`). A
+  filter for nil is a prefix scan of those entries and decides nothing either (verified:
+  `a_nil_writers_filter_for_nil_decides_nothing`). A nil writer is still exposed to the
+  known defect below when its transaction filtered for a non-nil value.
 - **No index, no refusal.** Without a unique index, a filtered read for the value is a
   plain scan that decides nothing, so both writers commit (verified:
   `without_an_index_both_commit`). This differs from Go, whose store validates the scan
@@ -42,9 +45,12 @@ modeled by `proofs/tla/ClientUniqueAdmission.tla`; the words and codes by
   unique-index equality plan breaks it: it reads the entry with a validated `get`, so a
   transaction that only filtered for a value it does not write loses its commit with
   `transaction conflict. Please retry` when another writer adds that value. A full scan
-  or a non-indexed filter of the same shape commits. This is not part of the guarantee;
-  `known_defect_a_unique_filter_read_aborts_the_commit` and the RED model configuration
-  `MC_ClientUniqueAdmission_Red_FilterReadDecides` pin today's answer so its fix is seen.
+  or a non-indexed filter of the same shape commits. It hits a transaction that writes
+  nil the same way. This is not part of the guarantee;
+  `known_defect_a_unique_filter_read_aborts_the_commit`,
+  `known_defect_a_nil_writers_filter_read_aborts_the_commit` and the RED model
+  configurations `MC_ClientUniqueAdmission_Red_FilterReadDecides` and
+  `MC_ClientUniqueAdmission_Red_FilterReadDecidesNil` pin today's answer so its fix is seen.
   Go aborts here too.
 - **Identical documents are a DocID race.** Two creates with identical content have the
   same DocID and race on the DocID mapping before any unique entry; the tests use

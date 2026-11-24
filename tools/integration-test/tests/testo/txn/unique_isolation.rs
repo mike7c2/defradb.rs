@@ -156,6 +156,30 @@ fn nil_values_are_not_refused() {
     .execute();
 }
 
+/// A filter for nil is a prefix scan of the nil entries, which carry their
+/// DocID, so it decides nothing: a transaction that read nil as absent and
+/// wrote nil commits after another writer of nil.
+#[test]
+#[mantra_macros::req_test("defra.txn.isolation.unique-nil")]
+fn a_nil_writers_filter_for_nil_decides_nothing() {
+    TestCase::from_actions(vec![
+        collection(UNIQUE),
+        TxnBegin::default().into(),
+        Request {
+            request: "query { User(filter: {name: {_eq: null}}) { age } }".into(),
+            txn: Some(0),
+            expected_data: json!({ "User": [] }),
+            ..Default::default()
+        }
+        .into(),
+        add(Some(0), "age: 1", None),
+        add(None, "age: 2", None),
+        commit(0, None),
+        users(json!([{ "name": null, "age": 1 }, { "name": null, "age": 2 }])),
+    ])
+    .execute();
+}
+
 /// Go validates the filter scan and aborts the second commit; this test is in
 /// `.github/testo/divergences.txt`.
 #[test]
@@ -184,6 +208,25 @@ fn known_defect_a_unique_filter_read_aborts_the_commit() {
         TxnBegin::default().into(),
         finds_no_alice(0),
         add(Some(0), r#"name: "bob", age: 3"#, None),
+        add(None, r#"name: "alice", age: 1"#, None),
+        commit(0, Some(CONFLICT)),
+        users(json!([{ "name": "alice", "age": 1 }])),
+    ])
+    .execute();
+}
+
+/// The same known defect for a writer of nil, which the unique index never
+/// checks: the transaction filtered for alice, wrote a document with no name,
+/// and still loses its commit when another writer adds alice. The fix flips
+/// this test to a commit and turns
+/// `MC_ClientUniqueAdmission_Red_FilterReadDecidesNil` GREEN.
+#[test]
+fn known_defect_a_nil_writers_filter_read_aborts_the_commit() {
+    TestCase::from_actions(vec![
+        collection(UNIQUE),
+        TxnBegin::default().into(),
+        finds_no_alice(0),
+        add(Some(0), "age: 3", None),
         add(None, r#"name: "alice", age: 1"#, None),
         commit(0, Some(CONFLICT)),
         users(json!([{ "name": "alice", "age": 1 }])),

@@ -577,13 +577,14 @@ RUNS=(
   "MC_ClientUniqueAdmission_Green_Explicit.cfg ClientUniqueAdmission.tla GREEN" # #3265: the second explicit commit of a unique value is a conflict and leaves nothing
   "MC_ClientUniqueAdmission_Green_Autocommit.cfg ClientUniqueAdmission.tla GREEN" # an autocommit loser re-runs and is refused as a unique violation
   "MC_ClientUniqueAdmission_Green_NoIndex.cfg ClientUniqueAdmission.tla GREEN" # without an index both commit
-  "MC_ClientUniqueAdmission_Green_Nil.cfg ClientUniqueAdmission.tla GREEN" # nil is never refused
+  "MC_ClientUniqueAdmission_Green_Nil.cfg ClientUniqueAdmission.tla GREEN" # nil is never refused over nil, only over a non-nil value its filter read
   "MC_ClientUniqueAdmission_Red_UniqueEntryUnvalidated.cfg ClientUniqueAdmission.tla RED" # the entry check is not validated: two documents hold the value (INV_AtMostOnePerNonNilValue)
   "MC_ClientUniqueAdmission_Red_PlainScanDecides.cfg ClientUniqueAdmission.tla RED" # a plain scan is validated: a writer is refused with no index (INV_NoIndexNotRefused)
   "MC_ClientUniqueAdmission_Red_LoserLeavesEntry.cfg ClientUniqueAdmission.tla RED" # a lost commit keeps its entry (INV_LoserLeavesNothing)
   "MC_ClientUniqueAdmission_Red_RerunReusesDecision.cfg ClientUniqueAdmission.tla RED" # the re-run keeps its first check (INV_AtMostOnePerNonNilValue)
   "MC_ClientUniqueAdmission_Red_NilChecked.cfg ClientUniqueAdmission.tla RED" # nil checked as a value (INV_NilNotRefused)
   "MC_ClientUniqueAdmission_Red_FilterReadDecides.cfg ClientUniqueAdmission.tla RED" # today's code: a filter read of another value aborts the commit (INV_RefusedOnlyOverItsOwnValue)
+  "MC_ClientUniqueAdmission_Red_FilterReadDecidesNil.cfg ClientUniqueAdmission.tla RED" # today's code: a nil writer's filter read of "v" aborts its commit (INV_RefusedOnlyOverItsOwnValue)
   "MC_IndexInTxn_Green.cfg IndexInTxn.tla GREEN" # #2374 follow-up: an index created or dropped in a txn is staged in it, listed in it, built after commit before the commit returns
   "MC_IndexInTxn_Red_WriteOutside.cfg IndexInTxn.tla RED" # the change commits on its own (INV_IsolatedUntilCommit)
   "MC_IndexInTxn_Red_EarlyBackfill.cfg IndexInTxn.tla RED" # backfill at create, before commit (INV_WorkOnlyAfterCommit)
