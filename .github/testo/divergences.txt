@@ -40,6 +40,9 @@ testo index::json_range_paths::like_and_ne_on_two_paths
 # Go's JSON index has no entry for an empty array, and Go refuses `_ne` on a JSON field; Rust finds the empty arrays at either path, as without the index.
 testo index::empty_array::like_under_all_on_two_json_paths_finds_the_empty_array
 testo index::empty_array::ne_under_all_on_two_json_paths_finds_the_empty_array
+# With `_in` on an indexed field Go ignores `order` on that field and returns the rows as the filter lists them; Rust applies it.
+testo index::composite_in_order::in_on_descending_first_field_ordered_ascending_follows_the_order
+testo index::composite_in_order::in_on_descending_first_field_ordered_descending_follows_the_order
 # Rust re-runs an encrypted index change that loses a race, so concurrent changes on different fields all land; Go answers
 # the loser with "transaction conflict. Please retry".
 testo txn::new_encrypted_index_concurrent::a_concurrent_encrypted_index_delete_and_adds_all_land
