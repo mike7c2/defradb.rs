@@ -1,6 +1,8 @@
 //! Backup import re-creates a document under its new genesis's ID, and keeps
 //! the ID the file names as an alias of it (`defra.document.id.import_alias`).
-//! `FILE_ID` is no genesis's ID, so the stored `_docID` cannot be it.
+//! The ID stays the file's only when the importing node rebuilds the same
+//! genesis (same signer, collection version and field values); `FILE_ID` is
+//! no genesis's ID, so here the stored `_docID` cannot be it.
 
 use integration_test::actions::{AddCollection, ImportBackup, Request};
 use integration_test::m;
@@ -37,7 +39,7 @@ fn an_imported_document_gets_a_new_id_and_its_file_id_resolves_to_it() {
             Request {
                 request: "query { User { _docID name } }".into(),
                 expected_data: json!({
-                    "User": [{ "_docID": m::all(json!([m::doc_id(), m::same("new")])), "name": "John" }],
+                    "User": [{ "_docID": m::all(json!([m::doc_id(), m::not(json!(FILE_ID)), m::same("new")])), "name": "John" }],
                 }),
                 ..Default::default()
             }
