@@ -9,13 +9,19 @@ block's content address. Whoever builds those blocks therefore knows the ID
 before anything is written.
 
 Who acts: the creator (a node that signs, or a client that signs its own
-graph), the node that commits, a peer that receives the blocks, a schema
-migration, and a backup import.
+graph), the node that commits, a peer that receives the blocks, the
+store-upgrade re-key of legacy documents, and a backup import.
 
 What must never happen: a path commits the document under an ID other than
-the one its creator computed. This file proves that for every path but one,
-and shows the one exception (backup import re-creates the document under a
-new genesis, so a new ID). It also proves that both kinds of signature reach
+the one its creator computed. Each path derives the committed ID from the
+genesis it holds, and this file proves, for the node, client-signed and peer
+paths, which check makes that genesis the creator's; a RED theorem beside
+each shows the ID moving once the check is gone. It shows the two
+exceptions: backup import re-creates the document under a new genesis, so a
+new ID, and the store-upgrade re-key moves a legacy document whose stored ID
+is not its genesis's ID to that ID, keeping the old one as an alias. A lens
+migration rewrites field values and never a genesis, so it is no path here.
+It also proves that both kinds of signature reach
 the ID, that a signer whose signature does not depend on a random nonce gives
 the same ID every time, that one that does can give two IDs, that a create
 whose ID is already stored is refused, and that a buggy builder which signs
@@ -36,8 +42,16 @@ Rust owners:
   (refuses a committed `_docID` other than `graph.doc_id()`).
 * crates/surfaces/http/src/client_signed_create.rs `conversation_on_socket`
   (the Rust client refuses an out-of-graph wave and a different `_docID`).
-* crates/database/db/src/merge/merge_handler/doc_identity.rs (a peer derives
-  the ID from the genesis it received).
+* crates/database/db/src/write/prepare.rs `PreparedCreateBlocks` and
+  crates/database/db/src/write/create.rs `compute` (an attempt reuses the
+  prepared blocks when the schema and short ID still match).
+* crates/database/db/src/merge/merge_handler/doc_identity.rs
+  `resolve_composite_doc_id` (a peer derives the ID from the genesis CID) and
+  crates/building-blocks/bitswap/src/message/mod.rs `verify_hash` (a block is
+  kept only when it hashes to its CID).
+* crates/database/db/src/definition/migration/shortid.rs
+  `resolve_legacy_identities` (a legacy ID moves to its genesis's ID and
+  stays as an alias).
 * crates/database/db/src/write/autocommit/helpers.rs `register_created_doc`
   (a stored ID is refused, the `get_doc_ref` branch).
 * crates/database/db/src/backup/import.rs (import creates again; the file's ID
@@ -135,89 +149,7 @@ def precommitId (w : World) (k : Key) (n : Nonce) (version : Nat)
   -- `derive_doc_id(genesis_cid)`.
   w.docIdOf (w.addrC (genesis w k n version fields))
 
-/-! ## Every path but import commits the precomputed ID -/
-
--- The ways a document reaches its committed state.
-inductive Path where
-  -- A node signs and commits in autocommit.
-  | nodeAutocommit
-  -- A node signs inside an explicit transaction, then it commits.
-  | nodeExplicitTxn
-  -- A client signs its own graph; the node replays exactly those signatures.
-  | clientSigned
-  -- A peer receives the genesis block and merges it.
-  | peerMerge
-  -- A schema migration keeps the one genesis the document has.
-  | migration
-  deriving DecidableEq, Repr
-
--- What a client-signed create's checks found: the replay used only the
--- client's signatures, and the committed ID was compared with the graph's.
-structure ClientChecks where
-  -- `ExactSignatures::sign_sync` replayed only the approved signatures.
-  replayExact : Bool
-  -- The committed `_docID` equals `graph.doc_id()` (lib.rs and the Rust client).
-  idMatches : Bool
-
--- The ID a path commits, or `none` when the path refuses. Node paths commit
--- the genesis they computed; a peer derives the ID from the genesis it
--- received, which is the same block; a migration takes the unique genesis; a
--- client-signed create commits only when both of its checks hold.
-def committedId (w : World) (k : Key) (n : Nonce) (version : Nat)
-    (fields : List FieldBlock) (checks : ClientChecks) : Path → Option DocId
-  -- Autocommit: the same `compute_document_blocks` result is written.
-  | .nodeAutocommit => some (w.docIdOf (w.addrC (genesis w k n version fields)))
-  -- Explicit transaction: the ID the response named is the ID committed.
-  | .nodeExplicitTxn => some (w.docIdOf (w.addrC (genesis w k n version fields)))
-  -- Client-signed: committed only when the replay and the ID check pass.
-  | .clientSigned =>
-      -- Both checks must hold, else the transaction is discarded.
-      if checks.replayExact && checks.idMatches then
-        -- The replayed graph is the client's own genesis.
-        some (w.docIdOf (w.addrC (genesis w k n version fields)))
-      else
-        -- A refusal: nothing commits.
-        none
-  -- A peer: `derive_doc_id` of the genesis block's address it received.
-  | .peerMerge => some (w.docIdOf (w.addrC (genesis w k n version fields)))
-  -- A migration: the document's one genesis, unchanged.
-  | .migration => some (w.docIdOf (w.addrC (genesis w k n version fields)))
-
--- Promise: on every path, whatever commits is the ID computed before commit.
-theorem precommit_eq_committed (w : World) (k : Key) (n : Nonce) (version : Nat)
-    (fields : List FieldBlock) (checks : ClientChecks) (p : Path) (id : DocId)
-    (h : committedId w k n version fields checks p = some id) :
-    id = precommitId w k n version fields := by
-  -- Look at each path in turn.
-  cases p with
-  -- Autocommit: the committed ID is the precomputed one by definition.
-  | nodeAutocommit => simp [committedId] at h; simp [precommitId, h]
-  -- Explicit transaction: the same.
-  | nodeExplicitTxn => simp [committedId] at h; simp [precommitId, h]
-  -- Client-signed: a commit happens only on the branch that keeps the ID.
-  | clientSigned =>
-      -- Unfold the path's rule.
-      simp only [committedId] at h
-      -- Split on whether both checks passed.
-      split at h
-      -- They passed: the committed ID is the graph's.
-      · simp at h; simp [precommitId, h]
-      -- They did not: nothing committed, so this case cannot arise.
-      · exact absurd h (by simp)
-  -- A peer: the received genesis is the creator's.
-  | peerMerge => simp [committedId] at h; simp [precommitId, h]
-  -- A migration: the unique genesis.
-  | migration => simp [committedId] at h; simp [precommitId, h]
-
--- Promise: a client-signed create whose ID check fails commits nothing.
-theorem client_signed_refuses_a_different_id (w : World) (k : Key) (n : Nonce)
-    (version : Nat) (fields : List FieldBlock) (checks : ClientChecks)
-    (h : checks.idMatches = false) :
-    committedId w k n version fields checks .clientSigned = none := by
-  -- With the ID check false, the rule takes its refusing branch.
-  simp [committedId, h]
-
-/-! ## Import is the one exception -/
+/-! ## Backup import re-creates the document -/
 
 -- Backup import creates the document again on the importing node, with that
 -- node's key and nonce, so it builds a new genesis.
@@ -323,6 +255,194 @@ theorem nonce_dependent_signer_can_differ (w : World)
   have hv := congrArg SigBlock.value (hS _ _ (Option.some.inj hsig))
   -- That contradicts the nonce changing the composite's signature.
   exact hdiff _ hv
+
+/-! ## Each path commits the ID of the genesis it holds
+
+Every path below derives the committed ID from a genesis block it holds at
+commit time, never from the creator's answer. Each promise names the code
+check that makes that block the creator's, and each RED theorem shows the ID
+moves once that check is gone. -/
+
+-- Promise: two different genesis blocks have two different IDs.
+theorem different_genesis_different_id (w : World)
+    (hC : Injective w.addrC) (hId : Injective w.docIdOf)
+    (c₁ c₂ : Composite) (h : c₁ ≠ c₂) :
+    w.docIdOf (w.addrC c₁) ≠ w.docIdOf (w.addrC c₂) :=
+  -- Equal IDs would give equal addresses, so equal blocks.
+  fun heq => h (hC _ _ (hId _ _ heq))
+
+-- A node-signed commit attempt (autocommit or explicit transaction).
+-- `prepare` computed the blocks with nonce `n` before the transaction
+-- (`PreparedCreateBlocks`, write/prepare.rs). The attempt, in
+-- `create::compute` (write/create.rs), reuses them when the schema and short
+-- ID still match; otherwise it computes them again, signing again with the
+-- nonce `retryNonce`.
+structure NodeAttempt where
+  -- `create::compute` found matching prepared blocks and reused them.
+  reusesPrepared : Bool
+  -- The nonce a recomputation draws.
+  retryNonce : Nonce
+
+-- The ID a node attempt commits: `persist` keys the document by the ID of the
+-- blocks it inserts, and the response names that same ID.
+def nodeCommitted (w : World) (k : Key) (n : Nonce) (version : Nat)
+    (fields : List FieldBlock) (a : NodeAttempt) : DocId :=
+  -- Reused blocks keep the prepared nonce; recomputed ones use the new one.
+  precommitId w k (if a.reusesPrepared then n else a.retryNonce) version fields
+
+-- Promise: a node attempt commits the prepared ID when it reuses the prepared
+-- blocks, or when the signer ignores its nonce (Ed25519, Secp256k1).
+theorem node_commits_precomputed (w : World) (k : Key) (n : Nonce) (version : Nat)
+    (fields : List FieldBlock) (a : NodeAttempt)
+    (h : a.reusesPrepared = true ∨ ∀ k p n n', w.sign k p n = w.sign k p n') :
+    nodeCommitted w k n version fields a = precommitId w k n version fields := by
+  -- Split on whether the attempt reused the prepared blocks.
+  cases hr : a.reusesPrepared with
+  -- Reused: the same nonce, so the same genesis.
+  | true => simp [nodeCommitted, hr]
+  -- Recomputed: only a nonce-free signer keeps the ID.
+  | false =>
+      -- The premise must then be the nonce-free signer.
+      have hdet : ∀ k p n n', w.sign k p n = w.sign k p n' := by
+        -- The reuse branch of `h` contradicts `hr`.
+        cases h with
+        -- Reuse claimed, but the attempt recomputed.
+        | inl hreuse => simp [hr] at hreuse
+        -- The signer ignores its nonce.
+        | inr hd => exact hd
+      -- Unfold the attempt: it signs with the retry nonce.
+      simp only [nodeCommitted, hr]
+      -- A nonce-free signer gives the same ID under either nonce.
+      exact (nonce_independent_signer_same_doc_id w hdet k n a.retryNonce version fields).symm
+
+-- RED: an attempt that recomputes with a signer whose composite signature
+-- depends on its nonce (randomized ECDSA) commits an ID other than the
+-- prepared one. Removing the reuse in `create::compute` plants this bug for
+-- such a signer.
+theorem node_recompute_with_random_signer_moves_id (w : World)
+    (hC : Injective w.addrC) (hId : Injective w.docIdOf) (hS : Injective w.addrS)
+    (k : Key) (n : Nonce) (version : Nat) (fields : List FieldBlock) (a : NodeAttempt)
+    (hr : a.reusesPrepared = false)
+    (hfields : ∀ b, signField w k n b = signField w k a.retryNonce b)
+    (hdiff : ∀ c, w.sign k (.composite c) n ≠ w.sign k (.composite c) a.retryNonce) :
+    nodeCommitted w k n version fields a ≠ precommitId w k n version fields := by
+  -- The attempt signs with the retry nonce.
+  simp only [nodeCommitted, hr]
+  -- Two nonces give two composite signatures, so two IDs.
+  exact fun heq => nonce_dependent_signer_can_differ w hC hId hS k n a.retryNonce
+    version fields hfields hdiff heq.symm
+
+-- A client-signed create: the node rebuilds the genesis from the client's
+-- signatures (`ExactSignatures::sign_sync` refuses any other block, so the
+-- rebuild may fail: `none`), then `execute_verified_graph_in_txn` commits only
+-- when the stored `_docID` equals `graph.doc_id()`.
+def clientCommitted (w : World) (graphId : DocId) (rebuilt : Option Composite) :
+    Option DocId :=
+  -- What the node rebuilt, if anything.
+  match rebuilt with
+  -- The replay refused a block outside the graph: nothing commits.
+  | none => none
+  -- A rebuilt genesis commits only when its ID is the graph's.
+  | some g => if w.docIdOf (w.addrC g) = graphId then some (w.docIdOf (w.addrC g)) else none
+
+-- Promise: whatever a client-signed create commits is `graph.doc_id()`,
+-- whatever block the node rebuilt.
+theorem client_signed_commits_precomputed (w : World) (k : Key) (n : Nonce)
+    (version : Nat) (fields : List FieldBlock) (rebuilt : Option Composite) (id : DocId)
+    (h : clientCommitted w (precommitId w k n version fields) rebuilt = some id) :
+    id = precommitId w k n version fields := by
+  -- Look at what the node rebuilt.
+  cases rebuilt with
+  -- Nothing rebuilt: nothing committed, so this case cannot arise.
+  | none => simp [clientCommitted] at h
+  -- A block: the commit happened only on the equal-ID branch.
+  | some g =>
+      -- Unfold the rule.
+      simp only [clientCommitted] at h
+      -- Split on the ID check.
+      split at h
+      -- The check passed: the committed ID is the graph's.
+      · rename_i heq; simp at h; rw [← h, heq]
+      -- The check failed: nothing committed.
+      · simp at h
+
+-- RED: the client-signed rule without its ID check commits whatever was
+-- rebuilt.
+def clientUnchecked (w : World) (rebuilt : Option Composite) : Option DocId :=
+  -- Commit the ID of the rebuilt block, compared with nothing.
+  rebuilt.map (fun g => w.docIdOf (w.addrC g))
+
+-- Promise (of the bug): a node that rebuilt a genesis other than the client's
+-- (for example, one it re-signed) commits an ID other than `graph.doc_id()`.
+theorem client_unchecked_commits_another_id (w : World)
+    (hC : Injective w.addrC) (hId : Injective w.docIdOf)
+    (k : Key) (n : Nonce) (version : Nat) (fields : List FieldBlock) (g : Composite)
+    (hg : g ≠ genesis w k n version fields) :
+    clientUnchecked w (some g) ≠ some (precommitId w k n version fields) := by
+  -- Suppose the planted rule committed the graph's ID.
+  intro heq
+  -- Peel the `some`: two different blocks would share an ID.
+  exact different_genesis_different_id w hC hId _ _ hg (Option.some.inj heq)
+
+-- A peer merge: the peer asks for the creator's head `asked` and receives a
+-- block. Bitswap keeps it only when its bytes hash to the CID it came under
+-- (bitswap message/mod.rs `verify_hash`), and `resolve_composite_doc_id`
+-- (merge_handler/doc_identity.rs) derives the ID from that CID.
+def peerCommitted (w : World) (asked : Address) (received : Composite) : Option DocId :=
+  -- A block that does not hash to the CID asked for is dropped.
+  if w.addrC received = asked then some (w.docIdOf (w.addrC received)) else none
+
+-- Promise: whatever a peer merges for the creator's head is stored under the
+-- creator's ID.
+theorem peer_commits_creators_id (w : World) (k : Key) (n : Nonce) (version : Nat)
+    (fields : List FieldBlock) (received : Composite) (id : DocId)
+    (h : peerCommitted w (w.addrC (genesis w k n version fields)) received = some id) :
+    id = precommitId w k n version fields := by
+  -- Unfold the rule.
+  simp only [peerCommitted] at h
+  -- Split on the hash check.
+  split at h
+  -- The hash matched: the ID is the creator's.
+  · rename_i heq; simp at h; rw [← h, heq]; rfl
+  -- It did not: nothing merged.
+  · simp at h
+
+-- RED: a peer that skips the hash check and derives the ID from whatever block
+-- arrived stores another ID when that block is not the creator's.
+theorem peer_without_hash_check_moves_id (w : World)
+    (hC : Injective w.addrC) (hId : Injective w.docIdOf)
+    (k : Key) (n : Nonce) (version : Nat) (fields : List FieldBlock) (received : Composite)
+    (hr : received ≠ genesis w k n version fields) :
+    w.docIdOf (w.addrC received) ≠ precommitId w k n version fields :=
+  -- Two different blocks, two different IDs.
+  different_genesis_different_id w hC hId _ _ hr
+
+-- The store-upgrade re-key (definition/migration/shortid.rs
+-- `resolve_legacy_identities`, run by `initialize_migrations` on open): a
+-- legacy document stored under `old` is mapped to the ID of its genesis, and
+-- `old` is kept as an alias when the two differ. The result is the primary ID
+-- and the alias, if any.
+def rekey (w : World) (old : DocId) (g : Composite) : DocId × Option DocId :=
+  -- `canonical_doc_id` comes from the genesis in the block graph, and
+  -- `set_doc_id_alias` runs only when it differs from the old ID.
+  (w.docIdOf (w.addrC g), if old = w.docIdOf (w.addrC g) then none else some old)
+
+-- Promise: a document whose stored ID is its genesis's ID keeps it, with no alias.
+theorem rekey_keeps_a_genesis_id (w : World) (k : Key) (n : Nonce) (version : Nat)
+    (fields : List FieldBlock) :
+    rekey w (precommitId w k n version fields) (genesis w k n version fields) =
+      (precommitId w k n version fields, none) := by
+  -- The old and canonical IDs are the same, so no alias is written.
+  simp [rekey, precommitId]
+
+-- Promise: a legacy document whose stored ID is not its genesis's ID gets a
+-- new primary ID, and its old one becomes an alias. This is the second path,
+-- beside backup import, that changes a stored document's ID.
+theorem rekey_moves_a_legacy_id (w : World) (old : DocId) (g : Composite)
+    (h : old ≠ w.docIdOf (w.addrC g)) :
+    (rekey w old g).1 ≠ old ∧ (rekey w old g).2 = some old :=
+  -- The primary is the canonical ID, and the alias branch is taken.
+  ⟨fun heq => h heq.symm, by simp [rekey, h]⟩
 
 /-! ## A stored ID is refused -/
 

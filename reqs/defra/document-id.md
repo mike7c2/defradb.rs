@@ -1,14 +1,8 @@
-# `defra.document`: Documents
-
-- **Parents:** ["defra"]
-
-What a document is and how it is named, beyond what Go's tests check.
-
 # `defra.document.id`: A document's ID is known before it commits
 
 - **Parents:** ["defra.document"]
 
-A document's ID is `bae-` and a UUIDv5 of the CID of its genesis composite block. That block carries the creator's signature when the create is signed, and its links are the CIDs of the field blocks, each signed in turn. So whoever builds or verifies a signed create knows its ID before it commits, and no path gives the committed document a different one. The one exception is backup import, below.
+A document's ID is `bae-` and a UUIDv5 of the CID of its genesis composite block. That block carries the creator's signature when the create is signed, and its links are the CIDs of the field blocks, each signed in turn. So whoever builds or verifies a signed create knows its ID before it commits, and no path gives the committed document a different one. There are two exceptions. Backup import is one, below. The other is the store upgrade that runs on open: it maps a legacy document whose stored ID is not its genesis's ID to the genesis's ID, and keeps the old ID as an alias. A document created under the current derivation already has its genesis's ID, so the upgrade leaves it alone.
 
 # `defra.document.id.node_signed`: A node-signed create commits the ID it returned
 
@@ -57,4 +51,4 @@ The two refusals of `defra.document.id.collision` carry a code beside Go's text:
 - **Parents:** ["defra.document.id"]
 - **Scenarios:** ["backup::simple::import_alias::an_imported_document_gets_a_new_id_and_its_file_id_resolves_to_it"]
 
-The one exception to `defra.document.id`, and a stopgap until an ID-preserving migration replaces it. Importing a backup creates each document again, as a new create on the importing node, so it gets the ID of its new genesis block. The `_docID` the file names is kept as an alias: a query filtered on it returns the imported document, which reports its new `_docID`.
+An exception to `defra.document.id`, and a stopgap until an ID-preserving migration replaces it. Importing a backup creates each document again, as a new create on the importing node, so it gets the ID of its new genesis block. The `_docID` the file names is kept as an alias: a query filtered on it returns the imported document, which reports its new `_docID`.

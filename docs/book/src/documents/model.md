@@ -19,8 +19,11 @@ taking its CID, links those CIDs from the composite, and signs the composite bef
 taking its CID. Every field signature, the composite signature and the collection
 version ID are therefore part of the ID, and whoever builds or verifies the blocks knows
 the ID before anything commits. No path gives a committed document another ID, except
-backup import (below). Requirements: `reqs/defra/document-id.md`; proof:
-`proofs/lean/Cid/SignedGenesis.lean` (`precommit_eq_committed` and its neighbours).
+backup import and the store-upgrade re-key of legacy documents (below). Requirements:
+`reqs/defra/document-id.md`; proof: `proofs/lean/Cid/SignedGenesis.lean`
+(`node_commits_precomputed`, `client_signed_commits_precomputed`,
+`peer_commits_creators_id`, each beside a RED theorem that drops its check, and
+`rekey_moves_a_legacy_id`).
 
 | Path | Where the ID is first known | What holds | Test |
 |------|-----------------------------|------------|------|
@@ -28,8 +31,9 @@ backup import (below). Requirements: `reqs/defra/document-id.md`; proof:
 | Node-signed, explicit transaction | the mutation response, before commit | the commit keeps it | `txn::signed_doc_id::a_node_signed_create_in_a_txn_commits_the_id_it_returned_{ed25519,secp256k1}` |
 | Client-signed, embedded | `graph.doc_id()`, before sending | `execute_verified_graph_in_txn` commits `graph.doc_id()` or discards the transaction | `signature::client_signed::*` (in-process) |
 | Client-signed, rust-http | `graph.doc_id()`, before sending | the Rust client refuses an out-of-graph wave and a different `_docID` | `signature::client_signed::*` (rust-http) |
-| P2P merge | the creator's response | the peer derives the ID from the genesis it received | `signature::doc_id_determinism::a_peer_shows_the_creators_doc_id`, `signature::peer::*` |
-| Schema migration | unchanged | the document's one genesis is kept | `go.lens` replication tests (#2483) |
+| P2P merge | the creator's response | the peer keeps a block only when it hashes to its CID (`verify_hash`) and derives the ID from that CID | `signature::doc_id_determinism::a_peer_shows_the_creators_doc_id`, `signature::peer::*` |
+| Lens migration | unchanged | a migration rewrites field values, never the genesis, so the document is read under its ID | `collection_version::migrations::query::with_doc_id::collection_migration_query_by_doc_id` (unsigned) |
+| Store-upgrade re-key | not kept for a legacy ID | `resolve_legacy_identities` maps a legacy document to its genesis's ID; a stored ID that differs becomes an alias | none: no legacy-store fixture |
 | Backup import | not kept | a new create under a new ID; the file's ID becomes an alias | `backup::simple::import_alias::*` |
 
 The HTTP guarantee is the client's. The server's websocket signer (`SessionSigner`)
@@ -71,10 +75,15 @@ leaving the collection version ID out of the genesis; any path that re-signs a g
 commits a document under an ID other than its precomputed one; removing the committed-ID
 check of `execute_verified_graph_in_txn` or of the Rust client's signing conversation.
 
-Backup import is the one documented exception, and a stopgap. It creates each document
-again on the importing node, so the document gets its new genesis's ID, and the ID the
-file names is kept as an alias of it (`set_doc_id_alias`). An ID-preserving migration
-built on collection configuration and the document DAG is meant to replace it.
+There are two documented exceptions. Backup import is a stopgap: it creates each
+document again on the importing node, so the document gets its new genesis's ID, and
+the ID the file names is kept as an alias of it (`set_doc_id_alias`). An ID-preserving
+migration built on collection configuration and the document DAG is meant to replace
+it. The store-upgrade re-key (`resolve_legacy_identities` in
+`crates/database/db/src/definition/migration/shortid.rs`, run on every open) maps each
+legacy document to the ID of its genesis, and keeps a stored ID that differs as an
+alias. A document created under the current derivation already has its genesis's ID,
+so the re-key leaves it alone; no test covers a legacy store.
 
 ## Short IDs
 
