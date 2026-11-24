@@ -24,3 +24,5 @@ testo index::query_with_relation_tie_order::ties_follow_the_second_condition_wit
 # the loser with "transaction conflict. Please retry".
 testo txn::new_encrypted_index_concurrent::a_concurrent_encrypted_index_delete_and_adds_all_land
 testo txn::new_encrypted_index_concurrent::concurrent_encrypted_index_adds_all_land
+# Without an index, Go's badger validates the filter scan and aborts the second explicit commit of an equal value with "transaction conflict. Please retry"; Rust's scan is a query read that decides nothing (AGENTS.md § Reads and writes), so both commit.
+testo txn::unique_isolation::without_an_index_both_commit

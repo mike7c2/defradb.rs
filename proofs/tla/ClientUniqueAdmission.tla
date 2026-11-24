@@ -1,9 +1,10 @@
 ---- MODULE ClientUniqueAdmission ----
 \* The story: two clients of one node each add a document. Each document
 \* carries a value in a field that may have a unique index. A client first
-\* runs a filtered read for its value (it hopes to see nothing), then the
-\* write path checks the unique index entry for that value, then the document
-\* and its entry are written, then the client commits.
+\* runs a filtered read for a value (usually the one it writes, but it may be
+\* another), then the write path checks the unique index entry for the value
+\* it writes, then the document and its entry are written, then the client
+\* commits.
 \*
 \* A client runs in one of two commit modes:
 \*   Explicit    it began a transaction itself and commits it itself. If the
@@ -15,15 +16,28 @@
 \*
 \* What can happen: the two clients interleave in every order. A client may
 \* start after the other committed, or both may read before either writes.
-\* Their values may be equal or different, and may be nil.
+\* Their values may be equal or different, and may be nil, and the value a
+\* client's filter reads may differ from the value it writes.
 \*
 \* What must never happen:
 \*   - with the index, two committed documents hold the same non-nil value;
 \*   - a refused client leaves a document or an index entry behind;
-\*   - an autocommit write is answered with a transaction conflict, or anyone
-\*     is refused when no other committed document holds its value;
+\*   - an autocommit write is answered with a transaction conflict;
+\*   - a unique violation is reported when no other committed document holds
+\*     the writer's value, or a conflict when no other committed document
+\*     holds a value the client read or wrote;
 \*   - without the index, anyone is refused;
 \*   - a client writing nil is refused.
+\*
+\* What the code does today and the house rules forbid: a query read is never
+\* a decision (AGENTS.md, Reads and writes), yet the unique-index equality plan
+\* reads the entry with a validated get
+\* (crates/engine/storage/src/index/eq_iterator.rs ExactMatchIterator::new_unique,
+\* its `txn.get`). So an explicit transaction that only filtered for a value
+\* it does not write loses its commit when another writer adds that value. INV_RefusedOnlyOverItsOwnValue states the rule; the RED
+\* configuration MC_ClientUniqueAdmission_Red_FilterReadDecides shows the code
+\* breaks it, and testo txn::unique_isolation
+\* known_defect_a_unique_filter_read_aborts_the_commit pins the same answer.
 \*
 \* Code it models:
 \*   crates/engine/storage/src/index/unique.rs UniqueIndex::save, the `has`
@@ -66,6 +80,7 @@ ASSUME MaxAttempts \in Nat \ {0}
 
 VARIABLES
   input,      \* input[c]: the value client c writes, fixed for the run
+  wanted,     \* wanted[c]: the value client c's filter reads, fixed for the run
   pc,         \* pc[c]: where client c is (begin, filter, check, write, commit, done, refused)
   snap,       \* snap[c]: the commit number client c's snapshot reads at
   attempts,   \* attempts[c]: how many attempts client c's write has begun
@@ -77,7 +92,7 @@ VARIABLES
   lastWrite,  \* lastWrite[v]: the commit number of the newest commit that wrote value v
   seq         \* the number of the newest commit
 
-vars == <<input, pc, snap, attempts, checked, scanned, reason, docs, entries, lastWrite, seq>>
+vars == <<input, wanted, pc, snap, attempts, checked, scanned, reason, docs, entries, lastWrite, seq>>
 
 \* The places a client can be.
 Places == {"begin", "filter", "check", "write", "commit", "done", "refused"}
@@ -92,15 +107,17 @@ Checks(v) == Indexed /\ (v # Nil \/ NilChecked)
 \* Value v already has a committed entry that client c's snapshot sees.
 SeesEntry(c, v) == \E e \in entries : e.v = v /\ e.at <= snap[c]
 
-\* Client c's commit must abort: a read it validates names value v, and a
-\* commit after its snapshot wrote that value.
+\* Client c's commit must abort: a read it validates names a value, and a
+\* commit after its snapshot wrote that value. The entry check names the value
+\* c writes; the filter names the value c read.
 Conflicts(c) ==
-  /\ checked[c] \/ scanned[c]
-  /\ lastWrite[input[c]] > snap[c]
+  \/ checked[c] /\ lastWrite[input[c]] > snap[c]
+  \/ scanned[c] /\ lastWrite[wanted[c]] > snap[c]
 
 \* Every variable holds a value of the shape it should.
 TypeOK ==
   /\ input \in [Clients -> Values]
+  /\ wanted \in [Clients -> Values]
   /\ pc \in [Clients -> Places]
   /\ snap \in [Clients -> Nat]
   /\ attempts \in [Clients -> 0..MaxAttempts]
@@ -112,9 +129,11 @@ TypeOK ==
   /\ lastWrite \in [Values -> Nat]
   /\ seq \in Nat
 
-\* Each client picks any value; nothing is committed and nobody has begun.
+\* Each client picks any value to write and any value to filter for;
+\* nothing is committed and nobody has begun.
 Init ==
   /\ input \in [Clients -> Values]
+  /\ wanted \in [Clients -> Values]
   /\ pc = [c \in Clients |-> "begin"]
   /\ snap = [c \in Clients |-> 0]
   /\ attempts = [c \in Clients |-> 0]
@@ -136,17 +155,18 @@ Begin(c) ==
   /\ checked' = [checked EXCEPT ![c] = FALSE]
   /\ scanned' = [scanned EXCEPT ![c] = FALSE]
   /\ pc' = [pc EXCEPT ![c] = IF input[c] = Nil THEN "check" ELSE "filter"]
-  /\ UNCHANGED <<input, reason, docs, entries, lastWrite, seq>>
+  /\ UNCHANGED <<input, wanted,reason, docs, entries, lastWrite, seq>>
 
-\* The filtered read. Served by the unique index, whether it is validated
-\* depends on the plan, so both are explored. Without an index it is a plain
+\* The filtered read, for value wanted[c]. Served by the unique index, whether
+\* it is validated depends on the plan, so both are explored: today the
+\* equality plan validates it (a known defect) and a full scan does not. Without an index it is a plain
 \* scan, validated only under the ScanDecides bug.
 Filter(c) ==
   /\ pc[c] = "filter"
   /\ \E validated \in (IF Indexed THEN BOOLEAN ELSE {ScanDecides}) :
        scanned' = [scanned EXCEPT ![c] = validated]
   /\ pc' = [pc EXCEPT ![c] = "check"]
-  /\ UNCHANGED <<input, snap, attempts, checked, reason, docs, entries, lastWrite, seq>>
+  /\ UNCHANGED <<input, wanted,snap, attempts, checked, reason, docs, entries, lastWrite, seq>>
 
 \* The write path checks the unique entry. Found at the snapshot, the write is
 \* refused with the unique violation and writes nothing. Not found, the read is
@@ -161,14 +181,14 @@ Check(c) ==
        ELSE /\ pc' = [pc EXCEPT ![c] = "write"]
             /\ checked' = [checked EXCEPT ![c] = Checks(input[c]) /\ EntryValidated]
             /\ UNCHANGED reason
-  /\ UNCHANGED <<input, snap, attempts, scanned, docs, entries, lastWrite, seq>>
+  /\ UNCHANGED <<input, wanted,snap, attempts, scanned, docs, entries, lastWrite, seq>>
 
 \* The document and its entry are written in the transaction; nothing is
 \* visible to the other client until the commit.
 Write(c) ==
   /\ pc[c] = "write"
   /\ pc' = [pc EXCEPT ![c] = "commit"]
-  /\ UNCHANGED <<input, snap, attempts, checked, scanned, reason, docs, entries, lastWrite, seq>>
+  /\ UNCHANGED <<input, wanted,snap, attempts, checked, scanned, reason, docs, entries, lastWrite, seq>>
 
 \* The entry a commit of client c lands: with the index, its value, owner and
 \* commit number.
@@ -183,7 +203,7 @@ CommitWins(c) ==
   /\ entries' = entries \cup Landed(c)
   /\ lastWrite' = [lastWrite EXCEPT ![input[c]] = seq + 1]
   /\ pc' = [pc EXCEPT ![c] = "done"]
-  /\ UNCHANGED <<input, snap, attempts, checked, scanned, reason>>
+  /\ UNCHANGED <<input, wanted,snap, attempts, checked, scanned, reason>>
 
 \* The commit loses. Its writes are dropped, except the entry the LoserLeaves
 \* bug keeps. Explicit: the client is told the transaction conflicted.
@@ -209,7 +229,7 @@ CommitLoses(c) ==
               /\ UNCHANGED <<attempts, reason>>
          ELSE /\ pc' = [pc EXCEPT ![c] = "begin"]
               /\ UNCHANGED <<snap, attempts, checked, scanned, reason>>
-  /\ UNCHANGED input
+  /\ UNCHANGED <<input, wanted>>
 
 \* A client at its commit either wins or loses, as validation decides.
 Commit(c) ==
@@ -232,13 +252,26 @@ INV_LoserLeavesNothing ==
     /\ c \notin docs
     /\ \A e \in entries : e.owner # c
 
-\* A refusal is the mode's own answer: an autocommit write is only ever refused
-\* as a unique violation, never as a conflict; and nobody is refused unless
-\* another committed document holds its value.
+\* A refusal is the mode's own answer and has a cause: an autocommit write is
+\* only ever refused as a unique violation, never as a conflict; a unique
+\* violation means another committed document holds the writer's value; a
+\* conflict means another committed document holds a value the client read
+\* or wrote.
 INV_LoserRefusedTyped ==
   \A c \in Clients : pc[c] = "refused" =>
+    \* autocommit answers only with the unique violation
     /\ (Mode = "Autocommit" => reason[c] = "UniqueViolation")
-    /\ \E d \in docs \ {c} : input[d] = input[c]
+    \* a unique violation: someone else committed the value c writes
+    /\ (reason[c] = "UniqueViolation" => \E d \in docs \ {c} : input[d] = input[c])
+    \* a conflict: someone else committed a value c wrote or read
+    /\ (reason[c] = "TxnConflict" =>
+          \E d \in docs \ {c} : input[d] \in {input[c], wanted[c]})
+
+\* The house rule (a query read decides nothing): nobody is refused unless
+\* another committed document holds the value it writes. The code breaks it
+\* today, so only the RED configuration FilterReadDecides checks it.
+INV_RefusedOnlyOverItsOwnValue ==
+  \A c \in Clients : pc[c] = "refused" => \E d \in docs \ {c} : input[d] = input[c]
 
 \* Without the index, nobody is refused.
 INV_NoIndexNotRefused == ~Indexed => \A c \in Clients : pc[c] # "refused"

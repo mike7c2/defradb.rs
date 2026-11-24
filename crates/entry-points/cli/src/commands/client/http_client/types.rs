@@ -51,6 +51,9 @@ pub struct TxBeginResponse {
 #[derive(Debug, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
+    /// The refusal's code, when the server names one.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 impl GraphQLResponse {

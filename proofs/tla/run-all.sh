@@ -583,6 +583,7 @@ RUNS=(
   "MC_ClientUniqueAdmission_Red_LoserLeavesEntry.cfg ClientUniqueAdmission.tla RED" # a lost commit keeps its entry (INV_LoserLeavesNothing)
   "MC_ClientUniqueAdmission_Red_RerunReusesDecision.cfg ClientUniqueAdmission.tla RED" # the re-run keeps its first check (INV_AtMostOnePerNonNilValue)
   "MC_ClientUniqueAdmission_Red_NilChecked.cfg ClientUniqueAdmission.tla RED" # nil checked as a value (INV_NilNotRefused)
+  "MC_ClientUniqueAdmission_Red_FilterReadDecides.cfg ClientUniqueAdmission.tla RED" # today's code: a filter read of another value aborts the commit (INV_RefusedOnlyOverItsOwnValue)
   "MC_IndexInTxn_Green.cfg IndexInTxn.tla GREEN" # #2374 follow-up: an index created or dropped in a txn is staged in it, listed in it, built after commit before the commit returns
   "MC_IndexInTxn_Red_WriteOutside.cfg IndexInTxn.tla RED" # the change commits on its own (INV_IsolatedUntilCommit)
   "MC_IndexInTxn_Red_EarlyBackfill.cfg IndexInTxn.tla RED" # backfill at create, before commit (INV_WorkOnlyAfterCommit)

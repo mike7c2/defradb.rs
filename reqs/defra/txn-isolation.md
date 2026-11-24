@@ -37,7 +37,7 @@ With `name: String @index(unique: true)`, two explicit transactions that run `ad
 - **Parents:** ["defra.txn.isolation"]
 - **Scenarios:** ["txn::unique_isolation::without_an_index_both_commit"]
 
-With `type User { name: String age: Int }` and no index, two explicit transactions that each read `User(filter: {name: {_eq: "alice"}}) { name }` as `[]` and then add `{name: "alice", age: 1}` and `{name: "alice", age: 2}` both commit, and `User { name age }` returns both documents.
+With `type User { name: String age: Int }` and no index, two explicit transactions that each read `User(filter: {name: {_eq: "alice"}}) { name }` as `[]` and then add `{name: "alice", age: 1}` and `{name: "alice", age: 2}` both commit, and `User { name age }` returns both documents. This is a deliberate divergence from Go, which validates the filter scan and fails the second commit with `transaction conflict. Please retry`: a query read decides nothing (AGENTS.md § Reads and writes).
 
 # `defra.index.unique`: Unique index refusals
 
@@ -48,6 +48,6 @@ How a write that would put a second document on a unique index value is refused.
 # `defra.index.unique.refusal-code`: A unique refusal carries `UNIQUE_CONSTRAINT_VIOLATION`
 
 - **Parents:** ["defra.index.unique"]
-- **Scenarios:** ["index::unique_refusal_code::a_create_refused_by_a_unique_index_carries_its_code", "index::unique_refusal_code::an_update_refused_by_a_unique_index_carries_its_code"]
+- **Scenarios:** ["index::unique_refusal_code::a_create_refused_by_a_unique_index_carries_its_code", "index::unique_refusal_code::an_update_refused_by_a_unique_index_carries_its_code", "index::unique_refusal_code::a_document_add_refused_by_a_unique_index_carries_its_code"]
 
-A GraphQL mutation refused by a unique index reports `extensions.code` `UNIQUE_CONSTRAINT_VIOLATION` beside its message, which is unchanged: `can not index a doc's field(s) that violates unique index. DocID: <writer's DocID>, name: alice` for `add_User`, and `failed to update index: can not index a doc's field(s) that violates unique index. DocID: <writer's DocID>, name: alice. IndexName: User_name_ASC` for an `update_User` that changes `name` to a value another document holds. The REST document API answers the same refusal with status 409 and the body `{"error": <message>, "code": "UNIQUE_CONSTRAINT_VIOLATION"}`. Go reports no code; the CLI prints only the message.
+A GraphQL mutation refused by a unique index reports `extensions.code` `UNIQUE_CONSTRAINT_VIOLATION` beside its message, which is unchanged: `can not index a doc's field(s) that violates unique index. DocID: <writer's DocID>, name: alice` for `add_User`, and `failed to update index: can not index a doc's field(s) that violates unique index. DocID: <writer's DocID>, name: alice. IndexName: User_name_ASC` for an `update_User` that changes `name` to a value another document holds. The REST document API (`POST /collections/User` with `{"name": "alice", "age": 2}`) answers the same refusal with status 409 and the body `{"error": <message>, "code": "UNIQUE_CONSTRAINT_VIOLATION"}`, stores nothing, and the Rust HTTP client returns it as a unique violation with the message unchanged. Go reports no code; the CLI prints only the message.

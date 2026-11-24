@@ -19,6 +19,8 @@ pub enum FailureKind {
 pub struct Failure {
     pub kind: FailureKind,
     pub message: String,
+    /// The error code the client returned beside the message, when it kept one.
+    pub code: Option<&'static str>,
 }
 
 impl Failure {
@@ -29,6 +31,7 @@ impl Failure {
         Self {
             kind: FailureKind::Unsupported,
             message: what.into(),
+            code: None,
         }
     }
 
@@ -37,7 +40,16 @@ impl Failure {
             true => FailureKind::TransactionConflict,
             false => FailureKind::Operation,
         };
-        Self { kind, message }
+        Self {
+            kind,
+            message,
+            code: None,
+        }
+    }
+
+    /// The failure carries `code` beside its message.
+    pub fn with_code(self, code: Option<&'static str>) -> Self {
+        Self { code, ..self }
     }
 }
 

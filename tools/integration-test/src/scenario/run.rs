@@ -24,14 +24,15 @@ fn graphql_errors(value: &Value) -> Vec<&str> {
 }
 
 /// Whether a GraphQL error whose message contains `wanted` carries
-/// `extensions.code` `code`. A failure that is not a GraphQL response
-/// carries no code.
+/// `extensions.code` `code`, or a failed op's message contains `wanted` and
+/// its client kept `code` beside it.
 fn carries_code<A>(outcome: &Result<Value, Failure>, wanted: &str, code: &str) -> bool
 where
     A: Op,
 {
-    let Ok(value) = outcome else {
-        return false;
+    let value = match outcome {
+        Ok(value) => value,
+        Err(failure) => return failure.message.contains(wanted) && failure.code == Some(code),
     };
     A::GRAPHQL
         && value

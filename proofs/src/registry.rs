@@ -3561,14 +3561,16 @@ pub const PROPERTIES: &[Property] = &[
         // on the worker pool by the db race tests; regolith's validation of
         // the entry read (v0.2.5, RepeatableRead.tla MC_DefraLevel_* configs,
         // and commit_nowait validating as commit, src/transaction/nowait.rs:1-6)
-        // is assumed, not modeled.
+        // is assumed, not modeled. INV_RefusedOnlyOverItsOwnValue is the
+        // house rule the code breaks today (a validated unique-eq filter
+        // read): only Red_FilterReadDecides checks it, and it must fail.
         family: "Client transaction isolation",
-        name: "INV_AtMostOnePerNonNilValue / INV_LoserLeavesNothing / INV_LoserRefusedTyped / INV_NoIndexNotRefused / INV_NilNotRefused",
+        name: "INV_AtMostOnePerNonNilValue / INV_LoserLeavesNothing / INV_LoserRefusedTyped / INV_NoIndexNotRefused / INV_NilNotRefused / INV_RefusedOnlyOverItsOwnValue",
         axis: Tla,
-        anchor: "crates/engine/storage/src/index/unique.rs UniqueIndex::save, UniqueIndex::has_nil_field; crates/database/db/src/error/mod.rs index_write_query_error; crates/database/db/src/write/autocommit/helpers.rs; crates/engine/query/src/executor.rs TXN_CONFLICT_MESSAGE, QueryResponseError::from_query_error",
+        anchor: "crates/engine/storage/src/index/unique.rs UniqueIndex::save, UniqueIndex::has_nil_field; crates/engine/storage/src/index/eq_iterator.rs ExactMatchIterator::new_unique; crates/database/db/src/error/mod.rs index_write_query_error; crates/database/db/src/write/autocommit/helpers.rs; crates/engine/query/src/executor.rs TXN_CONFLICT_MESSAGE, QueryResponseError::from_query_error",
         model_ref: "MC_ClientUniqueAdmission_{Green_*,Red_*}.cfg",
         tiers: &[Behavioral],
-        bound_by: "tools/integration-test/tests/testo/txn/unique_isolation.rs the_second_commit_of_a_unique_value_is_a_conflict, the_losers_rerun_is_refused_with_the_unique_code, nil_values_are_not_refused, without_an_index_both_commit; tools/integration-test/tests/testo/index/unique_refusal_code.rs a_second_autocommit_create_of_a_value_carries_its_code; crates/database/db/tests/write/conflict_reasons.rs a_create_that_loses_a_unique_index_race_reports_the_violation, every_round_of_a_free_unique_race_has_one_winner_and_one_typed_refusal",
+        bound_by: "tools/integration-test/tests/testo/txn/unique_isolation.rs the_second_commit_of_a_unique_value_is_a_conflict, the_losers_rerun_is_refused_with_the_unique_code, nil_values_are_not_refused, without_an_index_both_commit, known_defect_a_unique_filter_read_aborts_the_commit; tools/integration-test/tests/testo/index/unique_refusal_code.rs a_second_autocommit_create_of_a_value_carries_its_code; crates/database/db/tests/write/conflict_reasons.rs a_create_that_loses_a_unique_index_race_reports_the_violation, every_round_of_a_free_unique_race_has_one_winner_and_one_typed_refusal",
     },
     Property {
         family: "Client transaction isolation",

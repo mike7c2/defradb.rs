@@ -156,6 +156,8 @@ fn nil_values_are_not_refused() {
     .execute();
 }
 
+/// Go validates the filter scan and aborts the second commit; this test is in
+/// `.github/testo/divergences.txt`.
 #[test]
 #[mantra_macros::req_test("defra.txn.isolation.no-index-not-refused")]
 fn without_an_index_both_commit() {
@@ -167,14 +169,16 @@ fn without_an_index_both_commit() {
     TestCase::from_actions(actions).execute();
 }
 
-/// Characterizes, without promising it, what a transaction whose only read of
-/// a value is a unique-index equality filter sees when another writer adds
-/// that value before it commits. Whether the filter read is validated depends
-/// on the plan the query gets, so this is outside the guarantee
-/// (`txn/guarantees.md`); the test pins today's answer, that the index plan
-/// validates the read and the transaction loses, so a change to it is seen.
+/// A known defect, pinned so that its fix is seen. AGENTS.md § Reads and
+/// writes says a query read is never validated, yet the unique-index equality
+/// plan reads the entry with a validated `get`: a transaction that only
+/// filtered for alice and wrote bob loses its commit when another writer adds
+/// alice, though nobody else holds bob. A full scan or a non-indexed filter of
+/// the same shape commits. Go aborts here too. The fix flips this test to a
+/// commit, turns `MC_ClientUniqueAdmission_Red_FilterReadDecides` GREEN, and
+/// lists the test as a go-http divergence.
 #[test]
-fn a_unique_filter_read_decides_the_commit_under_todays_plan() {
+fn known_defect_a_unique_filter_read_aborts_the_commit() {
     TestCase::from_actions(vec![
         collection(UNIQUE),
         TxnBegin::default().into(),

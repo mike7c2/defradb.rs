@@ -4,7 +4,7 @@
 //! so the cases that check it run under the in-process and Rust HTTP clients;
 //! the message alone is checked under every client.
 
-use integration_test::actions::{Actions, AddCollection, Request};
+use integration_test::actions::{Actions, AddCollection, AddDoc, Request};
 use integration_test::scenario::{captures, Common, Text};
 use integration_test::test_case::TestCase;
 use integration_test::ClientType;
@@ -155,5 +155,30 @@ fn a_second_autocommit_create_of_a_value_is_refused_and_stores_nothing() {
         ),
         only_alice(),
     ])
+    .execute();
+}
+
+/// The document API (`AddDoc`: the node's `add_docs` in process, `POST
+/// /collections/User` under the Rust HTTP client) refuses the second alice
+/// as a unique violation, its message unchanged, and stores nothing.
+#[test]
+#[mantra_macros::req_test("defra.index.unique.refusal-code")]
+fn a_document_add_refused_by_a_unique_index_carries_its_code() {
+    TestCase {
+        client_types: Some(CODE_CLIENTS),
+        ..TestCase::from_actions(vec![
+            collection(),
+            add("alice", 1, None),
+            AddDoc {
+                collection: "User".into(),
+                doc_map: Some(json!({ "name": "alice", "age": 2 })),
+                expected_error: Some(format!("{VIOLATION}. DocID: {ALICE_2}, name: alice")),
+                expected_error_code: Some(CODE.into()),
+                ..Default::default()
+            }
+            .into(),
+            only_alice(),
+        ])
+    }
     .execute();
 }

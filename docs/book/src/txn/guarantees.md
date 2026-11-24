@@ -16,9 +16,9 @@ Two writers each add (or update to) the same non-nil value of a field with
 | Autocommit create (GraphQL `add_*`) | `can not index a doc's field(s) that violates unique index. DocID: …, <field>: <value>`, code `UNIQUE_CONSTRAINT_VIOLATION`; nothing stored | verified: testo `index::unique_refusal_code`, db `write::conflict_reasons::every_round_of_a_free_unique_race_has_one_winner_and_one_typed_refusal` |
 | Autocommit update (GraphQL `update_*`) | `failed to update index: <same text>. IndexName: …`, code `UNIQUE_CONSTRAINT_VIOLATION`; the document keeps its old value | verified: testo `index::unique_refusal_code::an_update_refused_by_a_unique_index_carries_its_code` |
 | Explicit transaction, embedded (in-process) | the second commit fails with `transaction conflict. Please retry`; nothing it wrote stays; re-running its create meets the unique code | verified: testo `txn::unique_isolation` |
-| Explicit transaction, HTTP | the commit fails with `transaction conflict. Please retry` and no `code`; the re-run's mutation carries `UNIQUE_CONSTRAINT_VIOLATION` | verified for the text and the re-run's code: testo `txn::unique_isolation` (Rust HTTP client). The `409` status is `commit_error_response` in `crates/surfaces/http/src/handlers/graphql/transactions.rs`, not checked by that test; its `outcome: transaction_conflict_aborted` receipt is given only to a typed registry conflict, and whether this race gets it is not tested here |
+| Explicit transaction, HTTP | the commit fails with `transaction conflict. Please retry` and no `code`; the re-run's mutation carries `UNIQUE_CONSTRAINT_VIOLATION` | verified for the text and the re-run's code: testo `txn::unique_isolation` (Rust HTTP client). The commit answers `409` with `{"error": "transaction conflict. Please retry", "outcome": "transaction_conflict_aborted"}` (`commit_error_response` in `crates/surfaces/http/src/handlers/graphql/transactions.rs`); that status and receipt were observed against a running node and are not pinned by a test |
 | Explicit transaction, CLI | the same commit text; the CLI prints messages only, so no code is shown | verified for the text: testo `txn::unique_isolation::the_second_commit_of_a_unique_value_is_a_conflict` |
-| REST document create (`POST /collections/{name}`) | `409` with the unique text and `"code": "UNIQUE_CONSTRAINT_VIOLATION"` | unit: `handlers::documents` and `error` tests in `crates/surfaces/http` |
+| REST document create (`POST /collections/{name}`) | `409` with the unique text and `"code": "UNIQUE_CONSTRAINT_VIOLATION"`; nothing stored | verified: testo `index::unique_refusal_code::a_document_add_refused_by_a_unique_index_carries_its_code` (the Rust HTTP client's `AddDoc` posts to this route), plus the `handlers::documents` and `error` unit tests in `crates/surfaces/http` |
 | `commit` and `commit_nowait` | identical: a commit on a worker's queue uses `commit_nowait`, which validates exactly as `commit` does | by regolith contract: regolith v0.2.5 `src/transaction/nowait.rs:1-6`; `RegolithTxn::commit` |
 
 The loser loses because the write path's check of the unique entry
@@ -34,14 +34,18 @@ modeled by `proofs/tla/ClientUniqueAdmission.tla`; the words and codes by
   so any number of documents may hold nil (verified: `nil_values_are_not_refused`).
 - **No index, no refusal.** Without a unique index, a filtered read for the value is a
   plain scan that decides nothing, so both writers commit (verified:
-  `without_an_index_both_commit`).
-- **A filter read is not a decision.** A transaction whose only read of a value is a
-  unique-index equality filter may or may not be aborted by a later writer of that value:
-  whether that read is validated depends on the plan the query gets. This is outside the
-  guarantee. Today the index plan reads the entry with a validated `get`, so the
-  transaction loses with `transaction conflict. Please retry`;
-  `a_unique_filter_read_decides_the_commit_under_todays_plan` pins that answer so a change
-  to it is seen.
+  `without_an_index_both_commit`). This differs from Go, whose store validates the scan
+  and aborts the second explicit commit with `transaction conflict. Please retry`; the
+  test is listed in `.github/testo/divergences.txt`.
+- **A filter read should not be a decision, and today one is (a known defect).** The
+  house rule is that a query read is never validated (AGENTS.md § Reads and writes). The
+  unique-index equality plan breaks it: it reads the entry with a validated `get`, so a
+  transaction that only filtered for a value it does not write loses its commit with
+  `transaction conflict. Please retry` when another writer adds that value. A full scan
+  or a non-indexed filter of the same shape commits. This is not part of the guarantee;
+  `known_defect_a_unique_filter_read_aborts_the_commit` and the RED model configuration
+  `MC_ClientUniqueAdmission_Red_FilterReadDecides` pin today's answer so its fix is seen.
+  Go aborts here too.
 - **Identical documents are a DocID race.** Two creates with identical content have the
   same DocID and race on the DocID mapping before any unique entry; the tests use
   documents that differ in another field.
