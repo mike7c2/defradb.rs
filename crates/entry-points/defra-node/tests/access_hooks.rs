@@ -170,6 +170,113 @@ fn merge_validator_accepts_rejects_and_defers_replicated_notes() -> Result<()> {
         .unwrap()
 }
 
+/// Judges a book by its body: "forbidden" is rejected, anything else accepted.
+struct RefuseForbidden;
+
+#[async_trait]
+impl MergeValidator for RefuseForbidden {
+    async fn validate(
+        &self,
+        candidate: &MergeCandidate<'_>,
+        view: &dyn MergeView,
+    ) -> Result<MergeVerdict, String> {
+        let fields = view
+            .composite_fields(candidate.cid)
+            .await?
+            .unwrap_or_default();
+        let forbidden = fields.iter().any(|(name, value)| {
+            name == "body"
+                && *value == FieldValue::Value(NormalValue::String("forbidden".to_string()))
+        });
+        Ok(if forbidden {
+            MergeVerdict::reject("forbidden")
+        } else {
+            MergeVerdict::Accept
+        })
+    }
+}
+
+async fn ids(node: &Node, collection: &str) -> Result<Vec<String>> {
+    let response = node
+        .execute(&format!("query {{ {collection} {{ _docID }} }}"))
+        .await;
+    if response.has_errors() {
+        panic!("{collection} query failed: {:?}", response.errors);
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(collection))
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|doc| doc.get("_docID").and_then(JsonValue::as_str))
+        .map(str::to_string)
+        .collect())
+}
+
+/// A collection added after the node started, whose definition carries a
+/// governance root, is judged by the merge validator that claimed it by rule;
+/// one without a root is not.
+#[test]
+fn a_collection_claimed_by_rule_and_added_after_start_is_judged() -> Result<()> {
+    edge::testing::edge()
+        .block_on(async {
+            let author = NodeBuilder::default()
+                .with_p2p(iroh_config())
+                .enable_signing()
+                .build()
+                .await?;
+            let receiver = NodeBuilder::default()
+                .with_p2p(iroh_config())
+                .with_access_hooks(
+                    AccessHooks::claiming(|collection| collection.governance_root.is_some())
+                        .with_merge_validator(Arc::new(RefuseForbidden)),
+                )
+                .build()
+                .await?;
+            let writer = author
+                .node_identity_did()
+                .expect("author has a signing identity");
+            defra_core::signing::set_signing_config(defra_core::signing::get_identity(writer));
+
+            // Both nodes run before either collection exists.
+            let sdl = r#"type Book_a @governed(root: "root-a") { body: String }
+                         type Plain { body: String }"#;
+            author.add_collection(sdl).await?;
+            receiver.add_collection(sdl).await?;
+
+            let (kept, _) = create(&author, "Book_a", r#"body: "kept""#).await?;
+            let (forbidden, _) = create(&author, "Book_a", r#"body: "forbidden""#).await?;
+            let (plain, _) = create(&author, "Plain", r#"body: "forbidden""#).await?;
+
+            connect(&receiver, &author).await?;
+            sync(&receiver, "Book_a", vec![kept.clone(), forbidden.clone()]).await?;
+            sync(&receiver, "Plain", vec![plain.clone()]).await?;
+
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while ids(&receiver, "Book_a").await? != vec![kept.clone()]
+                || ids(&receiver, "Plain").await? != vec![plain.clone()]
+            {
+                if Instant::now() >= deadline {
+                    panic!(
+                        "book {:?} plain {:?}",
+                        ids(&receiver, "Book_a").await?,
+                        ids(&receiver, "Plain").await?
+                    );
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+            sleep(Duration::from_secs(1)).await;
+            assert_eq!(ids(&receiver, "Book_a").await?, vec![kept]);
+
+            author.shutdown().await.unwrap();
+            receiver.shutdown().await.unwrap();
+            Ok(())
+        })
+        .unwrap()
+}
+
 /// Counts the mutations it is asked about.
 #[derive(Default)]
 struct CountWrites(std::sync::atomic::AtomicUsize);
