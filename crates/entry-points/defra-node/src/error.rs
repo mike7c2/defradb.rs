@@ -540,6 +540,16 @@ impl Error {
             within: within.to_string(),
         }
     }
+
+    /// The stable code a document refusal carries beside Go's text, as the
+    /// HTTP API reports it (`extensions.code`, the REST body's `code`).
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::Documents(error) => error.code(),
+            Self::Query(error) => error.code(),
+            _ => None,
+        }
+    }
 }
 
 /// Result alias for node operations.

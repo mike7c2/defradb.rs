@@ -51,6 +51,10 @@ pub struct TxBeginResponse {
 #[derive(Debug, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
+    /// The stable code a defradb.rs server adds beside Go's text; a Go
+    /// server sends none.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 impl GraphQLResponse {

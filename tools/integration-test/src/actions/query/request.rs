@@ -32,6 +32,10 @@ pub struct Request {
     pub expected_extensions: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_error: Option<String>,
+    /// The `extensions.code` one of the response's errors must carry; see
+    /// [`Op::expected_error_code`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_error_code: Option<String>,
     #[serde(flatten)]
     pub common: Common,
 }
@@ -49,6 +53,10 @@ impl Op for Request {
 
     fn expected_error(&self) -> Option<&str> {
         self.expected_error.as_deref()
+    }
+
+    fn expected_error_code(&self) -> Option<&str> {
+        self.expected_error_code.as_deref()
     }
 
     fn expected_extensions(&self) -> &Value {
@@ -70,11 +78,14 @@ impl Op for Request {
                     .map(|extensions| serde_json::to_value(extensions).unwrap_or_default());
                 envelope(
                     response.data,
-                    response.errors.iter().map(|e| e.message.as_str()),
+                    response
+                        .errors
+                        .iter()
+                        .map(|e| (e.message.as_str(), e.code())),
                     self.checked_extensions(extensions),
                 )
             })
-            .map_err(|e| Failure::operation(e.to_string()))
+            .map_err(|e| Failure::coded(e.to_string(), e.code()))
             .and_then(|envelope| self.typed(envelope))
     }
 }
@@ -151,13 +162,19 @@ fn is_float32(value: f64) -> bool {
 }
 
 /// A GraphQL response as the scenario compares it: its data, the message of
-/// each error, and its extensions when the action checks them.
+/// each error with its `extensions.code` when it has one, and its extensions
+/// when the action checks them.
 fn envelope<'a, I>(data: Option<Value>, errors: I, extensions: Option<Value>) -> Value
 where
-    I: Iterator<Item = &'a str>,
+    I: Iterator<Item = (&'a str, Option<&'a str>)>,
 {
     let mut envelope = json!({"data": data.unwrap_or_default()});
-    let errors: Vec<Value> = errors.map(|m| json!({"message": m})).collect();
+    let errors: Vec<Value> = errors
+        .map(|(message, code)| match code {
+            Some(code) => json!({"message": message, "extensions": {"code": code}}),
+            None => json!({"message": message}),
+        })
+        .collect();
     if !errors.is_empty() {
         envelope["errors"] = Value::Array(errors);
     }
@@ -189,11 +206,14 @@ impl HttpRun for Request {
                 .map(|response| {
                     envelope(
                         response.data,
-                        response.errors.iter().map(|e| e.message.as_str()),
+                        response.errors.iter().map(|e| {
+                            let code = e.extensions.as_ref().map(|x| x.code.as_str());
+                            (e.message.as_str(), code)
+                        }),
                         action.checked_extensions(response.extensions),
                     )
                 })
-                .map_err(|e| Failure::operation(e.to_string()))
+                .map_err(|e| Failure::coded(e.to_string(), e.code()))
                 .and_then(|envelope| action.typed(envelope))
         });
     }

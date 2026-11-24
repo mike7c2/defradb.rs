@@ -1,4 +1,5 @@
 mod add;
+mod add_client_signed;
 mod delete;
 mod delete_with_filter;
 mod purge;
@@ -8,6 +9,7 @@ mod update;
 mod update_with_filter;
 
 pub use add::AddDoc;
+pub use add_client_signed::AddDocClientSigned;
 pub use delete::DeleteDoc;
 pub use delete_with_filter::DeleteWithFilter;
 pub use purge::PurgeDocs;
