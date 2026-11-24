@@ -1,6 +1,7 @@
 //! Gossip over the mux connections: iroh-gossip's protocol state, run by one
 //! task that sends on the connections the endpoint already admitted.
 
+mod app_topics;
 mod delivery;
 mod driver;
 mod frame;
@@ -25,7 +26,14 @@ use super::endpoint::{spawn_task, RawTopics, SpawnedTasks};
 use super::peer_map::endpoint_id_to_peer_id;
 use super::protocols;
 
+use crate::iroh::command::Reply;
+use crate::iroh::endpoint_config::PeerAdmission;
 use crate::iroh::records::RecordsHandle;
+pub(super) use app_topics::gossip_name as app_gossip_name;
+pub use app_topics::{
+    AppMessage, AppSubscription, APP_TOPIC_BUFFER, APP_TOPIC_PREFIX, MAX_APP_PAYLOAD,
+    MAX_APP_TOPIC_LEN,
+};
 use delivery::Delivery;
 pub(super) use delivery::EventSender;
 use driver::Driver;
@@ -85,6 +93,14 @@ impl AddrInfo {
 enum Input {
     Join(String),
     Quit(String),
+    /// An embedder subscribes to an application topic, by its gossip name.
+    AppJoin {
+        topic: String,
+        admission: Arc<PeerAdmission>,
+        reply: Reply<AppSubscription>,
+    },
+    /// An embedder's subscription was dropped.
+    AppQuit(String),
     /// Peers known to hold a topic, to join it through.
     Hint {
         topic: String,
@@ -170,6 +186,21 @@ impl GossipHandle {
         }
         self.inbox.push(Input::Join(topic));
         true
+    }
+
+    /// Subscribes an embedder to the application topic gossiped as `topic`.
+    /// The driver answers on `reply`: one subscription per topic.
+    pub(super) fn subscribe_app(
+        &self,
+        topic: String,
+        admission: Arc<PeerAdmission>,
+        reply: Reply<AppSubscription>,
+    ) {
+        self.inbox.push(Input::AppJoin {
+            topic,
+            admission,
+            reply,
+        });
     }
 
     /// Joins `topic` through `peers` too, if we are subscribed to it.

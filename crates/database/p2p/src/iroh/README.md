@@ -61,16 +61,32 @@ opener's wrapped on the endpoint task as soon as the stream opens, that reset
 when dropped unfinished, where iroh's would finish the stream and pass a
 cut-off message as whole.
 
-## Libp2p-only transport methods
+## An embedder's topics
 
-These `P2PTransport` methods are libp2p-only by design:
+An application embedding a node can publish and subscribe on gossip topics of
+its own (`gossip/app_topics.rs`). A topic named `waterfall/1` gossips as
+`/defra-app/waterfall/1`, a prefix no Defra topic has, and
+`Delivery::received` refuses that prefix, so Defra never decodes an
+application message and an embedder never reads Defra's. The publisher seals
+each payload with its endpoint key (`gossip/raw_origin.rs`), and the gossip
+driver hands a subscription the sealer, not the neighbour that relayed the
+message. A message from a revoked peer is dropped even when an admitted
+neighbour relays it; the inbound allowlist decides who connects, not whose
+relayed messages are read.
 
-- `publish_raw`
-- `subscribe_raw`
-- `register_pubsub_rpc_topic`
+Nothing is stored and nothing is retried. A message is lost when the
+publisher has no neighbour on the topic, when a peer's send queue (64
+messages) or the driver's inbox (1024) is full, and when a subscription's
+buffer (`APP_TOPIC_BUFFER`) is full; the subscription counts only the last.
+iroh-gossip identifies a message by the hash of its bytes, so a payload
+published twice within its ID retention (90 seconds) is delivered once.
 
-They exist for libp2p's `pubsub_rpc` dispatcher and are left as the default
-not-supported/no-op behavior on Iroh.
+## Raw topics
+
+`publish_raw`, `subscribe_raw` and `register_pubsub_rpc_topic` carry the KMS
+`pubsub_rpc` exchange over gossip. A raw payload is sealed by its publisher
+and at most `max_raw_publish()` bytes; a received one becomes a
+`TransportEvent::GossipRawMessage` for the coordinator's dispatcher.
 
 `topic_peers()` is also not a full libp2p equivalent on Iroh. libp2p can ask
 gossipsub for all peers known for a topic. `iroh-gossip` exposes the direct

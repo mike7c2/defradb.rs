@@ -191,6 +191,14 @@ pub enum Error {
         limit: usize,
     },
 
+    /// An application topic name no node could gossip.
+    #[error("invalid application topic: {0}")]
+    InvalidAppTopic(String),
+
+    /// The node already holds a subscription to this application topic.
+    #[error("application topic {0:?} already has a subscription on this node")]
+    AppTopicSubscribed(String),
+
     /// GossipSub publish error.
     #[error("gossipsub publish error: {0}")]
     GossipSubPublish(String),

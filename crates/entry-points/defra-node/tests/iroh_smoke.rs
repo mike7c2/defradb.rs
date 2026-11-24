@@ -233,6 +233,88 @@ fn a_node_without_iroh_refuses_stream_protocols() -> Result<()> {
         .unwrap()
 }
 
+/// A row one embedded node publishes on an application topic reaches the
+/// other node's subscription, named by the publisher's peer ID.
+#[test]
+fn an_apps_topic_carries_a_message_between_embedded_nodes() -> Result<()> {
+    edge::testing::edge()
+        .block_on(async {
+            let station = NodeBuilder::default()
+                .with_p2p(test_iroh_config())
+                .build()
+                .await?;
+            let watcher = NodeBuilder::default()
+                .with_p2p(test_iroh_config())
+                .build()
+                .await?;
+            let station_p2p = station.p2p_system().cloned().expect("station p2p");
+            let watcher_p2p = watcher.p2p_system().cloned().expect("watcher p2p");
+            let station_peer = station_p2p.ops().local_peer_id().await?;
+            let station_addr = wait_for_connectable_iroh_addr(&station_p2p).await?;
+            watcher_p2p.ops().connect_peer(&station_addr).await?;
+            wait_for_connected_peer(&watcher_p2p, &station_peer).await?;
+
+            let _own = station.subscribe_p2p_topic("waterfall/1").await?;
+            let mut rows = watcher.subscribe_p2p_topic("waterfall/1").await?;
+            let limit = station.max_p2p_topic_payload()?;
+            let refused = station
+                .publish_p2p_topic("waterfall/1", &vec![0; limit + 1])
+                .await;
+            assert_eq!(
+                refused.unwrap_err().to_string(),
+                format!(
+                    "gossip broadcast of {} bytes is over the {limit} byte limit",
+                    limit + 1
+                )
+            );
+
+            // The mesh may still be forming: publish until one row arrives.
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let row = loop {
+                assert!(Instant::now() < deadline, "no row arrived");
+                let row = format!("row at {:?}", Instant::now());
+                station
+                    .publish_p2p_topic("waterfall/1", row.as_bytes())
+                    .await?;
+                sleep(Duration::from_millis(100)).await;
+                if let Some(row) = rows.try_recv() {
+                    break row;
+                }
+            };
+            assert_eq!(row.sender.as_str(), station_peer);
+            assert!(row.payload.starts_with(b"row at "));
+
+            station.shutdown().await.unwrap();
+            watcher.shutdown().await.unwrap();
+            Ok(())
+        })
+        .unwrap()
+}
+
+/// Only a node with P2P has application topics.
+#[test]
+fn a_node_without_p2p_refuses_application_topics() -> Result<()> {
+    edge::testing::edge()
+        .block_on(async {
+            let node = NodeBuilder::default().build().await?;
+            assert!(matches!(
+                node.subscribe_p2p_topic("waterfall/1").await,
+                Err(defra_node::Error::P2pDisabled)
+            ));
+            assert!(matches!(
+                node.publish_p2p_topic("waterfall/1", b"row").await,
+                Err(defra_node::Error::P2pDisabled)
+            ));
+            assert!(matches!(
+                node.max_p2p_topic_payload(),
+                Err(defra_node::Error::P2pDisabled)
+            ));
+            node.database().close().await?;
+            Ok(())
+        })
+        .unwrap()
+}
+
 fn test_iroh_config() -> P2PConfig {
     P2PConfig {
         bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),

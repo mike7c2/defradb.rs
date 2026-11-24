@@ -257,6 +257,9 @@ pub(super) async fn handle_command(
                 .map(|()| MessageId::new(uuid::Uuid::new_v4().to_string()));
             let _ = reply.send(result);
         }
+        IrohCommand::SubscribeApp { topic, reply } => {
+            gossip.subscribe_app(topic, Arc::clone(&resources.admission), reply);
+        }
         IrohCommand::TopicPeers { topic, reply } => {
             let _ = reply.send(Ok(gossip.topic_peers(&topic.to_string())));
         }

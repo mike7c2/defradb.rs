@@ -1311,6 +1311,49 @@ impl Node {
             .await?)
     }
 
+    /// Subscribe to the application topic `topic` on the node's iroh
+    /// connections, beside Defra's own gossip: each message another node
+    /// publishes on it comes with its publisher, proved by that node's key
+    /// and never the neighbour that relayed it. A node holds one
+    /// subscription per topic; dropping it leaves the topic.
+    ///
+    /// A topic is a name of 1 to 128 bytes in a namespace of its own, which no
+    /// Defra topic shares. Gossip keeps nothing and promises no delivery: see
+    /// [`p2p::iroh::AppSubscription`]. A message from a peer this node denied
+    /// ([`deny_p2p_peer`](Self::deny_p2p_peer)) is dropped, relayed or not.
+    #[cfg(feature = "p2p")]
+    pub async fn subscribe_p2p_topic(&self, topic: &str) -> Result<p2p::iroh::AppSubscription> {
+        Ok(self.app_topics()?.subscribe_app_topic(topic).await?)
+    }
+
+    /// Publish `payload` on the application topic `topic`, signed with the
+    /// node's peer key. `Ok` means it was handed to gossip, not that any node
+    /// received it. A node that publishes steadily subscribes too, so each
+    /// message goes out at once; one that does not joins the topic for every
+    /// publish. A payload over [`max_p2p_topic_payload`](Self::max_p2p_topic_payload)
+    /// is refused, and one published twice within about 90 seconds is
+    /// delivered once: number payloads that may repeat.
+    #[cfg(feature = "p2p")]
+    pub async fn publish_p2p_topic(&self, topic: &str, payload: &[u8]) -> Result<()> {
+        Ok(self.app_topics()?.publish_app_topic(topic, payload).await?)
+    }
+
+    /// The largest payload [`publish_p2p_topic`](Self::publish_p2p_topic)
+    /// accepts, in bytes.
+    #[cfg(feature = "p2p")]
+    pub fn max_p2p_topic_payload(&self) -> Result<usize> {
+        self.app_topics().map(|_| p2p::iroh::MAX_APP_PAYLOAD)
+    }
+
+    #[cfg(feature = "p2p")]
+    fn app_topics(&self) -> Result<&p2p::iroh::IrohTransport> {
+        self.p2p
+            .as_ref()
+            .ok_or(Error::P2pDisabled)?
+            .iroh_transport()
+            .ok_or(Error::AppTopicsNeedIroh)
+    }
+
     /// Gracefully stop background services owned by this node.
     ///
     /// **The node should not be used after this call.** When the `otel`
