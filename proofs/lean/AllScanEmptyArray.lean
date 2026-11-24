@@ -30,7 +30,9 @@ What must never happen:
   marker lookup another, so a match whose scanned array is `[]` is lost
   (`same_path_scan_complete`);
 - a full scan reads one path but tests its values with the `_like` pattern of
-  another path's condition, so a match is lost (`pinned_scan_complete`).
+  another path's condition, so a match is lost (`pinned_scan_complete`);
+- a range, `_eq` or `_in` scan on one path tests its values with a `_like`
+  pattern of another path, so a match is lost (`narrowed_scan_complete`).
 
 The RED side: with the old writer, which stored `[]` as null, the same scan
 misses an empty array that matches (`neg_null_writer_misses_empty`). A scan
@@ -38,7 +40,9 @@ that reads one path but looks the marker up at another misses
 `{"a": [1], "b": []}` (`neg_split_paths_miss_empty`). A scan that reads the
 last condition's path but tests the first condition's pattern misses
 `{"a": "xa", "b": 5}` under `{a: {_like: "x%"}, b: {_ne: 25}}`
-(`neg_mixed_scan_misses`).
+(`neg_mixed_scan_misses`). A range scan on `a` that tests `b`'s pattern on
+`a`'s values misses `{"a": 15, "b": "xa"}` under
+`{a: {_gt: 10}, b: {_like: "x%"}}` (`neg_unguarded_scan_misses`).
 
 Rust anchors:
 - the writer: `IndexManager::expand_value_for_indexing`
@@ -50,7 +54,8 @@ Rust anchors:
   which drops the marker from every bounded scan, and `full_field_range`, which
   makes the `_ne` and `_like` scans bounded ones;
 - the pinned path: `filter_to_index_scan`, where the first `_ne`, `_nin` or
-  `_like` condition gives the scan both its path and its value filter;
+  `_like` condition gives the scan both its path and its value filter, and
+  a narrowing scan keeps the value filter only when it names the scan's path;
 - the unique exemption: `skips_uniqueness` (`crates/engine/storage/src/index/mod.rs`).
 -/
 
@@ -367,6 +372,88 @@ theorem neg_mixed_scan_misses :
   -- both sides are literal; Lean computes them
   decide
 
+-- The scan when another condition narrows it: the narrowing condition gives
+-- the path, and a `_like` test joins it only when it names that same path.
+def narrowedScan {P V : Type} [DecidableEq P] (doc : P → V)
+    (scan : Cond P V) (like : Option (Cond P V)) : Bool :=
+  -- the narrowing condition reads its own path
+  scan.test (doc scan.path) &&
+    match like with
+    -- no pattern: nothing more to test
+    | none => true
+    -- a pattern joins the scan only at the scan's own path
+    | some l => if l.path = scan.path then l.test (doc scan.path) else true
+
+-- The broken scan: the pattern is tested on the scanned path whatever it names.
+def unguardedScan {P V : Type} (doc : P → V)
+    (scan : Cond P V) (like : Option (Cond P V)) : Bool :=
+  -- the narrowing condition reads its own path
+  scan.test (doc scan.path) &&
+    match like with
+    -- no pattern: nothing more to test
+    | none => true
+    -- the pattern reads the scanned path even when it names another
+    | some l => l.test (doc scan.path)
+
+/-- A range, `_eq` or `_in` scan keeps every document passing all conditions,
+    because a `_like` from another path is left to the filter. -/
+theorem narrowed_scan_complete {P V : Type} [DecidableEq P] (doc : P → V)
+    (cs : List (Cond P V)) (scan : Cond P V) (like : Option (Cond P V))
+    -- the document passes every condition
+    (h : passesAll doc cs = true)
+    -- the narrowing condition is one of them
+    (hs : scan ∈ cs)
+    -- and so is the pattern, if any
+    (hl : ∀ l, like = some l → l ∈ cs) :
+    -- the scan keeps it
+    narrowedScan doc scan like = true := by
+  -- every condition holds at its own path
+  have all : ∀ c ∈ cs, c.test (doc c.path) = true := by
+    -- read `passesAll` as a statement about each member
+    simpa [passesAll, List.all_eq_true] using h
+  -- unfold the scan into its two tests
+  unfold narrowedScan
+  -- the narrowing test holds; split on the pattern
+  cases like with
+  -- no pattern: only the narrowing test is left
+  | none => simp [all scan hs]
+  -- a pattern: split on whether its path is the scan's
+  | some l =>
+    -- the pattern is one of the conditions too
+    have hl' := all l (hl l rfl)
+    -- the same path: the pattern holds there; another: it is skipped
+    by_cases hp : l.path = scan.path
+    · -- read the pattern's own path as the scanned one
+      rw [hp] at hl'
+      -- both tests now hold at the scanned path
+      simp [all scan hs, hp, hl']
+    · -- the pattern is left to the filter
+      simp [all scan hs, hp]
+
+-- `_gt: 10`: a number above 10.
+def gt10 : Val → Bool
+  -- a number passes when it is above 10
+  | .num n => decide (10 < n)
+  -- a string does not
+  | _ => false
+
+-- `{"a": 15, "b": "xa"}`, with `true` standing for path `a`.
+def doc2 : Bool → Val
+  -- path `a` holds 15
+  | true => .num 15
+  -- path `b` holds "xa"
+  | false => .str ['x', 'a']
+
+/-- RED: a range scan on `a` that tests `b`'s pattern on `a`'s values misses
+    `{"a": 15, "b": "xa"}`, which passes `{a: {_gt: 10}, b: {_like: "x%"}}`. -/
+theorem neg_unguarded_scan_misses :
+    -- the document passes both conditions
+    passesAll doc2 [⟨true, gt10⟩, ⟨false, likeX⟩] = true
+    -- but the unguarded scan drops it
+    ∧ unguardedScan doc2 ⟨true, gt10⟩ (some ⟨false, likeX⟩) = false := by
+  -- both sides are literal; Lean computes them
+  decide
+
 end AllScanEmptyArray
 
 #print axioms AllScanEmptyArray.all_scan_complete
@@ -381,3 +468,5 @@ end AllScanEmptyArray
 #print axioms AllScanEmptyArray.neg_split_paths_miss_empty
 #print axioms AllScanEmptyArray.pinned_scan_complete
 #print axioms AllScanEmptyArray.neg_mixed_scan_misses
+#print axioms AllScanEmptyArray.narrowed_scan_complete
+#print axioms AllScanEmptyArray.neg_unguarded_scan_misses
