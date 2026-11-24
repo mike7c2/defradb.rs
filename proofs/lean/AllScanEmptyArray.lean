@@ -33,6 +33,10 @@ What must never happen:
   another path's condition, so a match is lost (`pinned_scan_complete`);
 - a range, `_eq` or `_in` scan on one path tests its values with a `_like`
   pattern of another path, so a match is lost (`narrowed_scan_complete`).
+- a full scan reads the path of a bare `_nin`, which a document without that
+  path passes, so the document is lost (`chosen_scan_complete`);
+- bounds from two `_any` clauses are joined into one range, which no single
+  element of a match may fall in (`separate_any_complete`).
 
 The RED side: with the old writer, which stored `[]` as null, the same scan
 misses an empty array that matches (`neg_null_writer_misses_empty`). A scan
@@ -42,7 +46,10 @@ last condition's path but tests the first condition's pattern misses
 `{"a": "xa", "b": 5}` under `{a: {_like: "x%"}, b: {_ne: 25}}`
 (`neg_mixed_scan_misses`). A range scan on `a` that tests `b`'s pattern on
 `a`'s values misses `{"a": 15, "b": "xa"}` under
-`{a: {_gt: 10}, b: {_like: "x%"}}` (`neg_unguarded_scan_misses`).
+`{a: {_gt: 10}, b: {_like: "x%"}}` (`neg_unguarded_scan_misses`). A scan pinned to `_nin` on `a` misses `{"b": "xa"}` under
+`{a: {_nin: [25]}, b: {_like: "x%"}}` (`neg_nin_pin_misses`). Joining
+`{_any: {_gt: 10}}` and `{_any: {_lt: 20}}` from two clauses misses `[5, 30]`
+(`neg_joined_any_misses`).
 
 Rust anchors:
 - the writer: `IndexManager::expand_value_for_indexing`
@@ -56,6 +63,10 @@ Rust anchors:
 - the pinned path: `filter_to_index_scan`, where the first `_ne`, `_nin` or
   `_like` condition gives the scan both its path and its value filter, and
   a narrowing scan keeps the value filter only when it names the scan's path;
+- the choice of that condition: `full_scan_at`, `is_full_scan` and
+  `accepts_missing` in `filter_to_index_scan`, which skip a bare `_nin` while
+  another condition can pin the scan, and `in_range`, which joins bounds only
+  within one `_any` clause (`FieldCondition::clause`);
 - the unique exemption: `skips_uniqueness` (`crates/engine/storage/src/index/mod.rs`).
 -/
 
@@ -454,6 +465,120 @@ theorem neg_unguarded_scan_misses :
   -- both sides are literal; Lean computes them
   decide
 
+-- A document whose paths may be missing: `none` at a path it does not have.
+-- A full scan of one path sees only documents with an entry there.
+def entryScan {P V : Type} (doc : P → Option V) (c : Cond P (Option V)) : Bool :=
+  -- the document needs a value at the path, and the value must pass
+  match doc c.path with
+  -- no entry at the path: the scan never sees the document
+  | none => false
+  -- an entry: kept when it passes the condition
+  | some v => c.test (some v)
+
+-- Whether a document missing the condition's path fails it, as `_ne` and the
+-- `_like` family do and a bare `_nin` does not.
+def needsEntry {P V : Type} (c : Cond P (Option V)) : Bool :=
+  -- a missing path is a `none` value
+  !c.test none
+
+-- The shipped choice: the first condition a missing path fails, else the first.
+def chooseScan {P V : Type} (cs : List (Cond P (Option V))) : Option (Cond P (Option V)) :=
+  -- prefer a condition that only documents with the path pass
+  (cs.find? needsEntry).orElse fun _ => cs.head?
+
+/-- When some condition fails a missing path, the chosen full scan keeps every
+    document that passes all conditions. -/
+theorem chosen_scan_complete {P V : Type} (doc : P → Option V)
+    (cs : List (Cond P (Option V)))
+    -- the document passes every condition
+    (h : passesAll doc cs = true)
+    -- and one condition fails a missing path
+    (hn : ∃ c ∈ cs, needsEntry c = true) :
+    -- the chosen scan exists and keeps it
+    ∃ c, chooseScan cs = some c ∧ entryScan doc c = true := by
+  -- the search for such a condition succeeds
+  obtain ⟨c0, hc0, hn0⟩ := hn
+  have hfind : (cs.find? needsEntry).isSome = true := by
+    -- `find?` finds something when a member passes
+    rw [List.find?_isSome]
+    exact ⟨c0, hc0, hn0⟩
+  -- name what it finds
+  obtain ⟨c, hc⟩ := Option.isSome_iff_exists.mp hfind
+  -- that is the chosen scan
+  refine ⟨c, by simp [chooseScan, hc, Option.orElse], ?_⟩
+  -- it is a member that fails a missing path
+  have hmem : c ∈ cs := List.mem_of_find?_eq_some hc
+  have hneed : needsEntry c = true := List.find?_some hc
+  -- the document passes it
+  have hpass : c.test (doc c.path) = true := by
+    -- read `passesAll` as a statement about each member
+    have := (List.all_eq_true.mp (by simpa [passesAll] using h)) c hmem
+    simpa using this
+  -- split on whether the document has the path
+  unfold entryScan
+  cases hd : doc c.path with
+  -- missing: it would fail the condition, so this cannot happen
+  | none =>
+    rw [hd] at hpass
+    simp [needsEntry, hpass] at hneed
+  -- present: the scan keeps it because it passes
+  | some v =>
+    rw [hd] at hpass
+    exact hpass
+
+-- `_nin: [25]` on an optional value: a missing path passes.
+def nin25 : Option Val → Bool
+  -- 25 fails
+  | some (.num 25) => false
+  -- anything else, a missing path included, passes
+  | _ => true
+
+-- `_like: "x%"` on an optional value: a missing path fails.
+def likeXOpt : Option Val → Bool
+  -- a value: the plain pattern
+  | some v => likeX v
+  -- a missing path never matches a pattern
+  | none => false
+
+-- `{"b": "xa"}`, with `true` standing for path `a`.
+def docNoA : Bool → Option Val
+  -- no `a`
+  | true => none
+  -- `b` holds "xa"
+  | false => some (.str ['x', 'a'])
+
+/-- RED: pinning the scan to the first condition, a `_nin` on `a`, misses
+    `{"b": "xa"}`, which passes `{a: {_nin: [25]}, b: {_like: "x%"}}`. -/
+theorem neg_nin_pin_misses :
+    -- the document passes both conditions
+    passesAll docNoA [⟨true, nin25⟩, ⟨false, likeXOpt⟩] = true
+    -- but a scan of `a` never sees it
+    ∧ entryScan docNoA ⟨true, nin25⟩ = false := by
+  -- both sides are literal; Lean computes them
+  decide
+
+/-- Two `_any` clauses each need some element: the scan bounded by one clause
+    alone keeps every document passing both. -/
+theorem separate_any_complete {V : Type} (p q : V → Bool) (a : Arr V)
+    -- the document passes both clauses
+    (hp : anyMatch p a = true) (_hq : anyMatch q a = true) :
+    -- the scan of the first clause finds it
+    valueScan p (entries a) = true :=
+  -- one clause is the single `_any` case
+  any_scan_complete p a hp
+
+/-- RED: joining the bounds of two `_any` clauses into one range misses
+    `[5, 30]`, which has an element above 10 and another below 20. -/
+theorem neg_joined_any_misses :
+    -- the array passes both clauses
+    anyMatch (fun n : Nat => decide (10 < n)) (some [5, 30]) = true
+    ∧ anyMatch (fun n : Nat => decide (n < 20)) (some [5, 30]) = true
+    -- but no single element lies in the joined range
+    ∧ valueScan (fun n : Nat => decide (10 < n) && decide (n < 20))
+        (entries (some [5, 30])) = false := by
+  -- all sides are literal; Lean computes them
+  decide
+
 end AllScanEmptyArray
 
 #print axioms AllScanEmptyArray.all_scan_complete
@@ -470,3 +595,7 @@ end AllScanEmptyArray
 #print axioms AllScanEmptyArray.neg_mixed_scan_misses
 #print axioms AllScanEmptyArray.narrowed_scan_complete
 #print axioms AllScanEmptyArray.neg_unguarded_scan_misses
+#print axioms AllScanEmptyArray.chosen_scan_complete
+#print axioms AllScanEmptyArray.neg_nin_pin_misses
+#print axioms AllScanEmptyArray.separate_any_complete
+#print axioms AllScanEmptyArray.neg_joined_any_misses

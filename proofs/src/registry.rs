@@ -2925,9 +2925,9 @@ pub const PROPERTIES: &[Property] = &[
         // The scan pieces are private to the planner and the range iterator;
         // tools/integration-test/tests/testo/index/empty_array.rs runs the queries. Boundary.
         family: "Index empty arrays",
-        name: "all_scan_complete / all_scan_sound / value_scan_skips_empty / any_scan_complete / empty_arrays_never_clash / same_path_scan_complete / pinned_scan_complete / narrowed_scan_complete: `_all` finds every matching document, empty arrays included, no other scan returns one, and a scan tests a `_like` pattern only at its own path",
+        name: "all_scan_complete / all_scan_sound / value_scan_skips_empty / any_scan_complete / empty_arrays_never_clash / same_path_scan_complete / pinned_scan_complete / narrowed_scan_complete / chosen_scan_complete / separate_any_complete: `_all` finds every matching document, empty arrays included, no other scan returns one, a scan tests a `_like` pattern only at its own path, a full scan reads the path of a condition a missing path fails, and bounds from two `_any` clauses are never joined",
         axis: Lean,
-        anchor: "crates/database/db/src/index/manager/value_extraction.rs IndexManager::expand_value_for_indexing; crates/building-blocks/document/src/normal.rs extract_json_leaves; crates/engine/query/src/planner/index_selection/filter_to_scan.rs filter_to_index_scan, all_path, empty_array_scan, full_field_range; crates/engine/storage/src/index/range_iterator.rs RangeIterator::next; crates/engine/storage/src/index/mod.rs skips_uniqueness",
+        anchor: "crates/database/db/src/index/manager/value_extraction.rs IndexManager::expand_value_for_indexing; crates/building-blocks/document/src/normal.rs extract_json_leaves; crates/engine/query/src/planner/index_selection/filter_to_scan.rs filter_to_index_scan, all_path, empty_array_scan, full_field_range, is_full_scan, accepts_missing; crates/engine/query/src/planner/index_selection/conditions.rs extract_field_conditions; crates/engine/storage/src/index/range_iterator.rs RangeIterator::next; crates/engine/storage/src/index/mod.rs skips_uniqueness",
         model_ref: "AllScanEmptyArray (lake build)",
         tiers: &[Boundary],
         bound_by: "",
