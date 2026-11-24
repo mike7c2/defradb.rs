@@ -525,6 +525,11 @@ pub trait PurgeOperations: defra_core::thread_bounds::MaybeSendSync {
     /// Asks for one purge. A repeat while one is pending is accepted and
     /// changes nothing.
     fn request_purge(&self) -> Result<(), PurgeRefusal>;
+
+    /// Whether the node runs in development mode, which a purge needs
+    /// however it is asked for: the route checks this, not its own
+    /// `dev_mode`, which also gates the dump, backup and lens routes.
+    fn development(&self) -> bool;
 }
 
 /// Why a node refused a purge, before anything stopped.

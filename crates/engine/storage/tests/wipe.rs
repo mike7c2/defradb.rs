@@ -55,3 +55,49 @@ fn wipe_refuses_an_owned_dir_holding_a_kept_path() {
     assert!(error.to_string().contains("refusing to wipe"), "{error}");
     assert!(keys.is_dir());
 }
+
+#[test]
+fn wipe_refuses_a_kept_path_that_climbs_back_into_an_owned_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let node = root.path().join("node");
+    let vera = node.join("vera");
+    let keys = vera.join("keys");
+    std::fs::create_dir_all(&keys).unwrap();
+    let error = storage::wipe(&WipeTarget {
+        store: None,
+        owned_dirs: vec![vera.clone()],
+        kept: vec![node.join("../node/vera/keys")],
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("refusing to wipe"), "{error}");
+    assert!(keys.is_dir(), "the keyring survives");
+}
+
+#[test]
+fn wipe_refuses_a_data_dir_that_climbs_back_into_an_owned_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let node = root.path().join("node");
+    let vera = node.join("vera");
+    let error = storage::check_wipe(&WipeTarget {
+        store: Some((
+            node.join("./../node/vera/store"),
+            RegolithStoreOptions::default(),
+        )),
+        owned_dirs: vec![vera],
+        kept: Vec::new(),
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("refusing to wipe"), "{error}");
+}
+
+#[test]
+fn wipe_accepts_disjoint_paths_written_with_dots() {
+    let root = tempfile::tempdir().unwrap();
+    let node = root.path().join("node");
+    storage::check_wipe(&WipeTarget {
+        store: Some((node.join("./data"), RegolithStoreOptions::default())),
+        owned_dirs: vec![node.join("vera"), node.join("x/../vera-worker")],
+        kept: vec![node.join("../node/keys")],
+    })
+    .unwrap();
+}

@@ -15,8 +15,11 @@ memory store, which has nothing on disk, gets something dropped.
 
 The wipe checks its target before touching anything (`plan`): when an owned
 directory is the data directory, the keyring or a directory above either, it
-refuses, and nothing is dropped or removed. This file proves, for every
-target the check lets through:
+refuses, and nothing is dropped or removed. It compares paths with `.` and
+`..` resolved (`normalize`), because a configured path such as
+`root/../root/vera/keys` names a place inside `root/vera` without starting
+with it. "Sits above" below always means: after resolving. This file proves,
+for every target the check lets through:
 
 * the removal set is exactly the owned directories (`removal_is_owned_dirs`);
 * the data directory is the drop target and is never in the removal set,
@@ -26,7 +29,11 @@ target the check lets through:
 * a memory target drops nothing and still removes exactly its owned
   directories (`memory_drops_nothing`);
 * the layout `defradb start` builds is let through
-  (`cli_layout_is_accepted`).
+  (`cli_layout_is_accepted`);
+* a keyring path that climbs back into an owned directory with `..` is
+  refused (`climbing_keyring_is_refused`), which a check comparing the raw
+  components lets through (`raw_check_misses_the_climb`, the bug a check
+  without `normalize` plants).
 
 The order of the purge's steps is the TLA+ model `proofs/tla/StorePurge.tla`.
 
@@ -52,10 +59,28 @@ structure Target where
 -- the data directory.
 def protectedPaths (t : Target) : List Path := t.kept ++ t.drop.toList
 
+-- Resolving a path's components left to right, the resolved ones kept in
+-- reverse (`acc`): a `.` changes nothing, a `..` takes back the last
+-- resolved component (none at the root, as the filesystem does), and any
+-- other component is added. The paths a wipe is handed are absolute, so a
+-- `..` at the root has nothing to take back.
+def resolveRev : List String → Path → List String
+  -- Nothing left: what is resolved so far.
+  | acc, [] => acc
+  -- One more component, then the rest.
+  | acc, c :: cs =>
+    if c = "." then resolveRev acc cs
+    else if c = ".." then resolveRev acc.tail cs
+    else resolveRev (c :: acc) cs
+
+-- A path with its `.` and `..` resolved, in order again (wipe.rs `lexical`).
+def normalize (p : Path) : Path := (resolveRev [] p).reverse
+
 -- The check the wipe runs first: no owned directory is, or sits above, a
--- protected path.
+-- protected path, both resolved.
 def accepted (t : Target) : Bool :=
-  t.owned.all fun dir => (protectedPaths t).all fun keep => !dir.isPrefixOf keep
+  t.owned.all fun dir => (protectedPaths t).all fun keep =>
+    !(normalize dir).isPrefixOf (normalize keep)
 
 -- What the wipe does with a target: the drop target and the removal set it
 -- acts on, or nothing at all when the check refuses the target.
@@ -77,7 +102,8 @@ theorem removal_is_owned_dirs (t : Target) (d : Option Path) (r : List Path)
 -- An accepted target says nothing removed equals or sits above a protected
 -- path.
 theorem accepted_spares (t : Target) (h : accepted t = true) :
-    ∀ dir ∈ t.owned, ∀ keep ∈ protectedPaths t, dir.isPrefixOf keep = false := by
+    ∀ dir ∈ t.owned, ∀ keep ∈ protectedPaths t,
+      (normalize dir).isPrefixOf (normalize keep) = false := by
   -- Unfold the two nested `all`s into their membership statements.
   intro dir hdir keep hkeep
   unfold accepted at h
@@ -92,7 +118,8 @@ theorem accepted_spares (t : Target) (h : accepted t = true) :
 -- above it is removed.
 theorem data_dir_is_dropped_never_removed (t : Target) (d : Option Path)
     (r : List Path) (h : plan t = some (d, r)) :
-    d = t.drop ∧ ∀ data ∈ t.drop, ∀ dir ∈ r, dir.isPrefixOf data = false := by
+    d = t.drop ∧ ∀ data ∈ t.drop, ∀ dir ∈ r,
+      (normalize dir).isPrefixOf (normalize data) = false := by
   -- Take the accepted branch apart, then use the check on the data path.
   unfold plan at h
   split at h
@@ -109,7 +136,8 @@ theorem data_dir_is_dropped_never_removed (t : Target) (d : Option Path)
 
 -- No removed path equals or sits above a kept path, such as the keyring.
 theorem removal_never_reaches_kept (t : Target) (d : Option Path) (r : List Path)
-    (h : plan t = some (d, r)) : ∀ dir ∈ r, ∀ keep ∈ t.kept, dir.isPrefixOf keep = false := by
+    (h : plan t = some (d, r)) :
+    ∀ dir ∈ r, ∀ keep ∈ t.kept, (normalize dir).isPrefixOf (normalize keep) = false := by
   -- The kept paths are protected, and the accepted branch removes only owned ones.
   unfold plan at h
   split at h
@@ -143,5 +171,28 @@ theorem cli_layout_is_accepted (persistent vera : Bool) :
     accepted (cliTarget ["home", "defradb"] persistent vera) = true := by
   -- Four concrete cases, each decided by computing the check.
   cases persistent <;> cases vera <;> decide
+
+-- The target from the review of #3280: root `/home/u/node`, the Vera
+-- directory `root/vera` owned, and a keyring configured as
+-- `../node/vera/keys`, which `defradb start` joins to the root.
+def climbingTarget : Target where
+  drop := none
+  owned := [["home", "u", "node", "vera"]]
+  kept := [["home", "u", "node", "..", "node", "vera", "keys"]]
+
+-- A keyring that climbs back into an owned directory is refused.
+theorem climbing_keyring_is_refused : accepted climbingTarget = false := by
+  -- Resolved, the keyring is `/home/u/node/vera/keys`, inside the owned one.
+  decide
+
+-- The check as it was before `normalize`: raw components compared.
+def acceptedRaw (t : Target) : Bool :=
+  t.owned.all fun dir => (protectedPaths t).all fun keep => !dir.isPrefixOf keep
+
+-- The bug that check plants: it lets the climbing keyring through, and the
+-- wipe would remove `/home/u/node/vera` with the keyring inside.
+theorem raw_check_misses_the_climb : acceptedRaw climbingTarget = true := by
+  -- Raw, `..` is a component like any other, so no prefix matches.
+  decide
 
 end StorePurge

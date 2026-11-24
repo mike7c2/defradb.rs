@@ -153,6 +153,8 @@ fn purge_removes_every_collection_and_document() {
     run(
         integration_test::scenario_id!(),
         wipe_scenario(NewNode {
+            // Go's process node purges only with `--development`.
+            development: Some(true),
             database_dir: Some(String::new()),
             ..Default::default()
         }),
@@ -166,6 +168,7 @@ fn a_purged_persistent_node_stays_empty_after_a_restart() {
         integration_test::scenario_id!(),
         vec![
             NewNode {
+                development: Some(true),
                 database_dir: Some(String::new()),
                 ..Default::default()
             }
@@ -387,5 +390,37 @@ fn purge_removes_the_embedded_vera_state() {
             ],
             ..Default::default()
         }),
+    );
+}
+
+#[test]
+#[mantra_macros::req_test("defra.store_purge.keyring_kept")]
+fn defradb_start_refuses_a_keyring_climbing_into_the_vera_state() {
+    if !embedded_vera_built() {
+        eprintln!("skipped: defradb is built without the embedded-vera feature");
+        return;
+    }
+    // `x/../vera/keys` resolves inside `<rootdir>/vera`, which a purge
+    // removes, without starting with it.
+    run(
+        integration_test::scenario_id!(),
+        vec![NewNode {
+            process: Some(ProcessBinary::Rust),
+            development: Some(true),
+            keyring: true,
+            start_args: vec![
+                "--document-acp-type".into(),
+                "verars-embedded".into(),
+                "--identity".into(),
+                integration_test::scenario::identity::private_key_hex(1),
+                "--vera-deployment-id".into(),
+                "9407".into(),
+                "--keyring-path".into(),
+                "x/../vera/keys".into(),
+            ],
+            expected_error: Some("refusing to wipe".into()),
+            ..Default::default()
+        }
+        .into()],
     );
 }

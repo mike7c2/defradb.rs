@@ -6,7 +6,7 @@
 //! removal set against [`check`], and `proofs/tla/StorePurge.tla` the order:
 //! the wipe runs only after the node closed, and the node opens only after it.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::corekv::{Error, Result};
 use crate::{RegolithStore, RegolithStoreOptions};
@@ -36,14 +36,21 @@ impl std::fmt::Debug for WipeTarget {
 }
 
 /// Refuses a target that would remove the data directory, a kept path or a
-/// directory above either, before anything is touched.
+/// directory above either, before anything is touched. Paths are compared
+/// with `.` and `..` resolved, so `root/../root/vera/keys` is seen inside
+/// `root/vera`; nothing on disk is read, so an absent directory still passes.
 pub fn check(target: &WipeTarget) -> Result<()> {
     let protected = target
         .kept
         .iter()
         .chain(target.store.as_ref().map(|(path, _)| path));
     for keep in protected {
-        if let Some(dir) = target.owned_dirs.iter().find(|dir| keep.starts_with(dir)) {
+        let resolved = lexical(keep);
+        if let Some(dir) = target
+            .owned_dirs
+            .iter()
+            .find(|dir| resolved.starts_with(lexical(dir)))
+        {
             return Err(Error::Backend(format!(
                 "refusing to wipe '{}': it holds '{}', which a purge keeps",
                 dir.display(),
@@ -66,6 +73,27 @@ pub fn wipe(target: &WipeTarget) -> Result<()> {
         remove_dir(dir)?;
     }
     Ok(())
+}
+
+/// `path` with each `.` dropped and each `..` taking back the component
+/// before it. A `..` with nothing to take back stays at the start of a
+/// relative path and is dropped at the root, as the filesystem does.
+fn lexical(path: &Path) -> PathBuf {
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match resolved.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    resolved.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => resolved.push(".."),
+            },
+            other => resolved.push(other),
+        }
+    }
+    resolved
 }
 
 fn remove_dir(dir: &Path) -> Result<()> {

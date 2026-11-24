@@ -61,6 +61,10 @@ impl defra_http::PurgeOperations for PurgeGate {
             _ => defra_http::PurgeRefusal::NoHandler,
         })
     }
+
+    fn development(&self) -> bool {
+        self.development
+    }
 }
 
 impl Node {

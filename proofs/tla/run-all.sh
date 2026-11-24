@@ -1357,6 +1357,7 @@ RUNS=(
   "MC_StorePurge_Red_MemorySkipsVeraDirs.cfg StorePurge.tla RED" # a memory store keeps the old Vera chain (INV_NothingSurvives)
   "MC_StorePurge_Red_CliWipeAfterVeraStopFailed.cfg StorePurge.tla RED" # the CLI wipes and restarts after a failed Vera stop (INV_NoRestartAfterFailedTeardown)
   "MC_StorePurge_Red_CliWipeAfterCloseFailed.cfg StorePurge.tla RED" # the CLI wipes and restarts after a failed close (INV_NoRestartAfterFailedTeardown)
+  "MC_StorePurge_Red_SignerDropped.cfg StorePurge.tla RED" # defradb start only pins its Orbis signer and the restart loses it (INV_SignerSurvivesRestart)
   "MC_NodeDrop_Red_NoAbortOnDrop.cfg NodeDrop.tla RED" # a shutdown set that does not abort on drop leaves every task holding the database
   "MC_NodeDrop_Red_DropAwaits.cfg NodeDrop.tla RED" # the dropping thread waits for an aborted task to end
   "MC_EmbeddedVeraStop_Green.cfg EmbeddedVeraStop.tla GREEN" # requests drain before the embedded Vera node stops; the stop has a deadline and frees the directory

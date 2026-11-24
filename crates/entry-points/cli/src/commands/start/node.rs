@@ -405,7 +405,10 @@ impl Node {
 
         let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
         let wipe_target = super::purge::wipe_target(&config)?;
-        let purge = Arc::new(super::purge::CliPurge::new(shutdown_tx.clone()));
+        let purge = Arc::new(super::purge::CliPurge::new(
+            shutdown_tx.clone(),
+            config.development,
+        ));
         servers.http_server = servers.http_server.with_purge_arc(purge.clone());
 
         Ok(Self {

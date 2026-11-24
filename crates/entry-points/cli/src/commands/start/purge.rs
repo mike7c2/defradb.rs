@@ -43,13 +43,15 @@ pub(super) fn outcome(
 pub(super) struct CliPurge {
     requested: AtomicBool,
     shutdown: mpsc::Sender<()>,
+    development: bool,
 }
 
 impl CliPurge {
-    pub(super) fn new(shutdown: mpsc::Sender<()>) -> Self {
+    pub(super) fn new(shutdown: mpsc::Sender<()>, development: bool) -> Self {
         Self {
             requested: AtomicBool::new(false),
             shutdown,
+            development,
         }
     }
 
@@ -65,6 +67,10 @@ impl defra_http::PurgeOperations for CliPurge {
             let _ = self.shutdown.try_send(());
         }
         Ok(())
+    }
+
+    fn development(&self) -> bool {
+        self.development
     }
 }
 

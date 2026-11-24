@@ -154,9 +154,13 @@ A node with its data on disk that is purged, then stopped and started again over
 # `defra.store_purge.keyring_kept`: A purge keeps what the keyring holds
 
 - **Parents:** ["defra.store_purge"]
-- **Scenarios:** ["node::purge::purge_keeps_a_keyring_held_identity_and_peer_key"]
+- **Scenarios:** ["node::purge::purge_keeps_a_keyring_held_identity_and_peer_key", "node::purge::defradb_start_refuses_a_keyring_climbing_into_the_vera_state"]
 
 A `defradb start` node with its keyring on, a node identity in it and P2P on has the same node identity DID and the same peer ID after a purge: the keyring lives outside the store, and the purge never removes it.
+
+The purge compares paths with `.` and `..` resolved, without reading the disk. A keyring or data directory configured to climb back into a directory the purge removes, such as `--keyring-path x/../vera/keys` with the embedded Vera node's `<rootdir>/vera`, is refused: `defradb start` does not start, and fails with `refusing to wipe '<rootdir>/vera': it holds '<rootdir>/x/../vera/keys', which a purge keeps`. Disjoint paths written with `.` or `..` start as before.
+
+An Orbis remote signer (`--signer-type orbis`) is held for the whole of `defradb start`, so after a purge the restarted node signs with the same Orbis signer as before it.
 
 # `defra.store_purge.store_peer_key_regenerated`: A peer key held in the store is regenerated
 
@@ -177,7 +181,7 @@ An embedded node serving HTTP with collection management and development mode on
 - **Parents:** ["defra.store_purge"]
 - **Scenarios:** ["node::purge::purge_is_refused_without_development_mode", "node::purge::defradb_start_refuses_the_purge_without_development_mode"]
 
-Without development mode `POST /api/v0/purge` answers `403` with `operation not permitted whilst development mode is disabled. Operation: Purge`, Go's text, and the node keeps all its data. This holds however the purge is asked for, as Go checks it in `PurgeAndRestart` itself: `defradb start` without `--development`, and an embedded node built without `NodeBuilder::with_development` (or an HTTP config's `with_dev_mode`), whether through the route, the CLI client or `Node::purge_as` in process.
+Without development mode `POST /api/v0/purge` answers `403` with `operation not permitted whilst development mode is disabled. Operation: Purge`, Go's text, and the node keeps all its data. This holds however the purge is asked for, as Go checks it in `PurgeAndRestart` itself: `defradb start` without `--development`, and an embedded node built without `NodeBuilder::with_development` (or an HTTP config's `with_dev_mode`), whether through the route, the CLI client or `Node::purge_as` in process. The route asks the node whether it is in development mode rather than reading its own HTTP config: an embedded node built with `NodeBuilder::with_development(true)` and an HTTP config without `with_dev_mode` accepts the purge through the route as `Node::purge_as` does, while its dump, backup and lens routes still follow the HTTP config.
 
 # `defra.store_purge.embedded_vera`: A purge resets the embedded Vera node's state
 

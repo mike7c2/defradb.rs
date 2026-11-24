@@ -105,7 +105,11 @@ pub async fn purge(
 ) -> Result<StatusCode, HttpError> {
     require_permission(&state, &identity, NodePermission::DocumentUpdate).await?;
 
-    if !state.dev_mode {
+    let development = state
+        .purge
+        .as_ref()
+        .map_or(state.dev_mode, |purge| purge.development());
+    if !development {
         return Err(refused(PurgeRefusal::DevelopmentMode));
     }
     state.require_collection_mgmt()?;
@@ -250,6 +254,39 @@ mod tests {
     impl crate::PurgeOperations for Refusing {
         fn request_purge(&self) -> Result<(), PurgeRefusal> {
             Err(self.0)
+        }
+
+        fn development(&self) -> bool {
+            true
+        }
+    }
+
+    /// A node that accepts the purge, in development mode or not.
+    struct Accepting {
+        development: bool,
+    }
+
+    impl crate::PurgeOperations for Accepting {
+        fn request_purge(&self) -> Result<(), PurgeRefusal> {
+            Ok(())
+        }
+
+        fn development(&self) -> bool {
+            self.development
+        }
+    }
+
+    #[nuclei::test]
+    async fn the_route_checks_the_nodes_development_mode_not_its_own() {
+        for (route_dev_mode, node_development, expected) in [
+            (false, true, StatusCode::OK),
+            (true, false, StatusCode::FORBIDDEN),
+        ] {
+            let node = Arc::new(Accepting {
+                development: node_development,
+            });
+            let (status, _) = purge_answer(server(route_dev_mode, true).with_purge_arc(node)).await;
+            assert_eq!(status, expected, "route dev_mode {route_dev_mode}");
         }
     }
 

@@ -52,6 +52,10 @@
 \*   7. a run starts two teardowns - INV_OnePurgePerRun;
 \*   8. the node starts again after a teardown or a wipe that failed -
 \*      INV_NoRestartAfterFailedTeardown;
+\*   9. on the Cli path, the node starts again without the Orbis remote
+\*      signer `defradb start` registered once, before its first run: each
+\*      run ends by clearing the process's identity store, which drops
+\*      every signer nothing holds - INV_SignerSurvivesRestart;
 \* and what must happen: an accepted purge ends with the node serving again,
 \* or with the node exited on a failure - LIVE_PurgeServesAgain.
 \*
@@ -63,7 +67,8 @@
 \* Node::shutdown; crates/engine/storage/src/wipe.rs wipe;
 \* crates/entry-points/cli/src/commands/start/run.rs Node::run_until;
 \* crates/entry-points/cli/src/commands/start/purge.rs outcome;
-\* crates/entry-points/cli/src/commands/start/mod.rs StartArgs::execute.
+\* crates/entry-points/cli/src/commands/start/mod.rs StartArgs::execute,
+\* StartArgs::hold_remote_signer.
 EXTENDS Naturals
 
 CONSTANTS
@@ -87,7 +92,8 @@ CONSTANTS
   CliChecksVeraStop,      \* guard: the CLI wipes only when the Vera node stopped
   CliChecksClose,         \* guard: the CLI wipes only when the database closed
   LastHandleChecked,      \* guard: shutdown_and_wipe wipes only as the node's last handle (WipeWhileHeld)
-  ShutdownOnce            \* guard: shutdown_and_wipe wipes nothing after another caller's shutdown (WipeAfterShutdown)
+  ShutdownOnce,           \* guard: shutdown_and_wipe wipes nothing after another caller's shutdown (WipeAfterShutdown)
+  SignerHeld              \* guard: defradb start holds its Orbis signer across every run (SignerDropped)
 
 \* Every key class the store itself holds.
 StoreClasses == {"Data", "StoreHeldPeerKey"}
@@ -114,6 +120,7 @@ VARIABLES
   storeData,     \* the key classes of the old store still present
   veraDirs,      \* the old Vera directories are still on disk
   keyring,       \* the keyring still holds the node identity and peer key
+  signer,        \* the process's identity store still has the Orbis remote signer
   requests,      \* how many purge requests the client sent
   req,           \* the purge request in flight: "none", "waiting" for the
                  \* handler, or "held" by a teardown running inside it
@@ -131,7 +138,7 @@ VARIABLES
   restartedAfterFailure \* ghost: the node started again after a failed teardown or wipe
 
 vars == <<path, store, vera, development, handler, otherHandle, otherCaller, phase, run,
-          storeOpen, storeLocked, veraRunning, storeData, veraDirs, keyring,
+          storeOpen, storeLocked, veraRunning, storeData, veraDirs, keyring, signer,
           requests, req, purges, accepted, refused, otherShut, blind, veraStop,
           closeResult, wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
           restartedAfterFailure>>
@@ -153,6 +160,7 @@ TypeOK ==
   /\ storeData \subseteq StoreClasses
   /\ veraDirs \in BOOLEAN
   /\ keyring \in BOOLEAN
+  /\ signer \in BOOLEAN
   /\ requests \in 0..2
   /\ req \in {"none", "waiting", "held"}
   /\ purges \in 0..2
@@ -192,6 +200,9 @@ Init ==
   \* Its directories exist only when it runs.
   /\ veraDirs = (vera = "Embedded")
   /\ keyring = TRUE
+  \* `defradb start` registered the Orbis signer before the first run; on
+  \* the Embedded path it stands for any signer the application registered.
+  /\ signer = TRUE
   /\ requests = 0
   /\ req = "none"
   /\ purges = 0
@@ -221,7 +232,7 @@ Request ==
   /\ requests < 2
   /\ requests' = requests + 1
   /\ req' = "waiting"
-  /\ UNCHANGED <<fixed, phase, run, storeOpen, storeLocked, veraRunning, storeData,
+  /\ UNCHANGED <<fixed, signer, phase, run, storeOpen, storeLocked, veraRunning, storeData,
                  veraDirs, keyring, purges, accepted, refused, otherShut, blind,
                  veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
                  openedBeforeWipe, restartedAfterFailure>>
@@ -241,7 +252,7 @@ HandleNotDevelopment ==
   /\ ~development
   /\ req' = "none"
   /\ refused' = TRUE
-  /\ UNCHANGED <<fixed, phase, run, storeOpen, storeLocked, veraRunning, storeData,
+  /\ UNCHANGED <<fixed, signer, phase, run, storeOpen, storeLocked, veraRunning, storeData,
                  veraDirs, keyring, requests, purges, accepted, otherShut, blind,
                  veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
                  openedBeforeWipe, restartedAfterFailure>>
@@ -258,7 +269,7 @@ HandleNoHandler ==
   \* Without the guard the teardown starts all the same.
   /\ phase' = IF HandlerChecked THEN phase ELSE "stopping"
   /\ purges' = IF HandlerChecked THEN purges ELSE purges + 1
-  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
+  /\ UNCHANGED <<fixed, signer, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
                  keyring, requests, accepted, otherShut, blind, veraStop, closeResult,
                  wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
                  restartedAfterFailure>>
@@ -278,7 +289,7 @@ HandleAccepted ==
   /\ phase' = "stopping"
   \* Answered now, or held until the teardown it runs ends.
   /\ req' = IF ShutdownOutsideRequest THEN "none" ELSE "held"
-  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
+  /\ UNCHANGED <<fixed, signer, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
                  keyring, requests, refused, otherShut, blind, veraStop, closeResult,
                  wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
                  restartedAfterFailure>>
@@ -292,7 +303,7 @@ HandleRepeat ==
   /\ GateOnce
   /\ purges >= 1
   /\ req' = "none"
-  /\ UNCHANGED <<fixed, phase, run, storeOpen, storeLocked, veraRunning, storeData,
+  /\ UNCHANGED <<fixed, signer, phase, run, storeOpen, storeLocked, veraRunning, storeData,
                  veraDirs, keyring, requests, purges, accepted, refused, otherShut,
                  blind, veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
                  openedBeforeWipe, restartedAfterFailure>>
@@ -314,7 +325,7 @@ OtherShutdown ==
   /\ storeOpen' = (closeResult' = "failed")
   \* A memory store's contents go with the closed process memory.
   /\ storeData' = IF store = "Memory" /\ closeResult' = "ok" THEN {} ELSE storeData
-  /\ UNCHANGED <<fixed, phase, run, storeLocked, veraDirs, keyring, requests, req,
+  /\ UNCHANGED <<fixed, signer, phase, run, storeLocked, veraDirs, keyring, requests, req,
                  purges, accepted, refused, blind, wiped, wipeResult, wipedWhileHeld,
                  openedBeforeWipe, restartedAfterFailure>>
 
@@ -330,7 +341,7 @@ Drain ==
                 [] ShutdownOnce -> "exited"
                 [] OTHER        -> "closed"
   /\ blind' = (otherShut /\ ~ShutdownOnce)
-  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
+  /\ UNCHANGED <<fixed, signer, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
                  keyring, requests, req, purges, accepted, refused, otherShut,
                  veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
                  openedBeforeWipe, restartedAfterFailure>>
@@ -343,7 +354,7 @@ StopVera ==
   \* Only a stop that succeeded frees the directories.
   /\ veraRunning' = (veraRunning /\ veraStop' = "failed")
   /\ phase' = "veraStopped"
-  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, storeData, veraDirs, keyring,
+  /\ UNCHANGED <<fixed, signer, run, storeOpen, storeLocked, storeData, veraDirs, keyring,
                  requests, req, purges, accepted, refused, otherShut, blind,
                  closeResult, wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
                  restartedAfterFailure>>
@@ -357,6 +368,10 @@ Close ==
   \* A memory store's contents go with the closed process memory.
   /\ storeData' = IF store = "Memory" /\ closeResult' = "ok" THEN {} ELSE storeData
   /\ phase' = "closed"
+  \* The CLI's run then clears the identity store (clear_identity_store),
+  \* which keeps a signer only while something holds it; without the guard
+  \* the Orbis signer is only pinned, and goes.
+  /\ signer' = IF path = "Cli" /\ ~SignerHeld THEN FALSE ELSE signer
   /\ UNCHANGED <<fixed, run, storeLocked, veraRunning, veraDirs, keyring, requests,
                  req, purges, accepted, refused, otherShut, blind, veraStop, wiped,
                  wipeResult, wipedWhileHeld, openedBeforeWipe, restartedAfterFailure>>
@@ -383,7 +398,7 @@ Decide ==
   /\ phase = "closed"
   /\ phase' = IF TeardownFails \/ HandleHeld THEN "exited" ELSE "wiping"
   /\ storeLocked' = IF phase' = "wiping" THEN storeLocked /\ otherHandle ELSE storeLocked
-  /\ UNCHANGED <<fixed, run, storeOpen, veraRunning, storeData, veraDirs, keyring,
+  /\ UNCHANGED <<fixed, signer, run, storeOpen, veraRunning, storeData, veraDirs, keyring,
                  requests, req, purges, accepted, refused, otherShut, blind, veraStop,
                  closeResult, wiped, wipeResult, wipedWhileHeld, openedBeforeWipe,
                  restartedAfterFailure>>
@@ -411,7 +426,7 @@ Wipe ==
   \* The keyring is never in the removal set; without the guard it is.
   /\ keyring' = IF wipeResult' = "ok" /\ ~KeyringExcluded THEN FALSE ELSE keyring
   /\ wipedWhileHeld' = (wipedWhileHeld \/ storeOpen \/ storeLocked \/ veraRunning)
-  /\ UNCHANGED <<fixed, phase, run, storeOpen, storeLocked, veraRunning, requests, req,
+  /\ UNCHANGED <<fixed, signer, phase, run, storeOpen, storeLocked, veraRunning, requests, req,
                  purges, accepted, refused, otherShut, blind, veraStop, closeResult,
                  openedBeforeWipe, restartedAfterFailure>>
 
@@ -422,7 +437,7 @@ WipeFailedExit ==
   /\ wipeResult = "failed"
   /\ NoRestartAfterFailedWipe
   /\ phase' = "exited"
-  /\ UNCHANGED <<fixed, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
+  /\ UNCHANGED <<fixed, signer, run, storeOpen, storeLocked, veraRunning, storeData, veraDirs,
                  keyring, requests, req, purges, accepted, refused, otherShut, blind,
                  veraStop, closeResult, wiped, wipeResult, wipedWhileHeld,
                  openedBeforeWipe, restartedAfterFailure>>
@@ -442,7 +457,7 @@ Open ==
   /\ purges' = 0
   /\ openedBeforeWipe' = (openedBeforeWipe \/ ~wiped)
   /\ restartedAfterFailure' = (restartedAfterFailure \/ TeardownFailed \/ wipeResult = "failed")
-  /\ UNCHANGED <<fixed, storeData, veraDirs, keyring, requests, req, accepted,
+  /\ UNCHANGED <<fixed, signer, storeData, veraDirs, keyring, requests, req, accepted,
                  refused, otherShut, blind, veraStop, closeResult, wiped, wipeResult,
                  wipedWhileHeld>>
 
@@ -477,6 +492,10 @@ INV_NothingSurvives == (run = 2) => (storeData = {} /\ ~veraDirs)
 
 \* The keyring always keeps the node identity and peer key.
 INV_KeyringKept == keyring
+
+\* Once the node serves again, the remote signer it signed with is still
+\* registered.
+INV_SignerSurvivesRestart == (run = 2) => signer
 
 \* A refused purge leaves the node serving with everything it stored, unless
 \* the application shut the node down itself.
