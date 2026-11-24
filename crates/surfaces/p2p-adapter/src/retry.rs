@@ -60,11 +60,40 @@ pub type FailureRecorder = workers::Background;
 #[cfg(target_arch = "wasm32")]
 pub type FailureRecorder = n0_future::task::JoinHandle<()>;
 
+/// How many scopes the failure recorder records at once.
+///
+/// Each record is a transaction whose commit waits until it is durable. One
+/// at a time, the recorder took one record per device sync, and a local
+/// write waited for one record per replicator, each behind every record
+/// queued before it: on a device whose syncs take tens of milliseconds a
+/// node with ten replicators spent a second on a small write, and a burst of
+/// writes queued for longer than a request's deadline. Records running at
+/// once share their syncs.
+const RECORDER_LANES: usize = 16;
+
+/// Records one lane holds before the recorder waits for it.
+const RECORDER_LANE_DEPTH: usize = 64;
+
+/// The lane `failure`'s scope is recorded in: always the same for one peer,
+/// document and collection, so a scope's records keep their order.
+fn recorder_lane(failure: &p2p::sync::PushFailure) -> usize {
+    use std::hash::Hasher;
+    let mut hasher = rapidhash::fast::RapidHasher::default();
+    for part in [&failure.peer_id, &failure.doc_id, &failure.collection_id] {
+        hasher.write(part.as_bytes());
+        hasher.write_u8(0xff);
+    }
+    (hasher.finish() % RECORDER_LANES as u64) as usize
+}
+
 /// Record head announcements and compare-delete only the exact durable marker
 /// generation returned to the sender before its PushLog attempt. Every write
 /// it makes is storage work: it runs as background work of the pool the
 /// peerstore is placed on (the fallback pool without one), until its
 /// channel closes or it is aborted.
+///
+/// Records of different scopes run at once, in [`RECORDER_LANES`] lanes;
+/// the records of one scope run one after another, in the order they came.
 pub fn spawn_failure_recorder<S: storage::corekv::Store + 'static>(
     peerstore: storage::stores::Peerstore<S>,
     mut failures: p2p::sync::PushFailureReceiver,
@@ -72,9 +101,27 @@ pub fn spawn_failure_recorder<S: storage::corekv::Store + 'static>(
     #[cfg(not(target_arch = "wasm32"))]
     let pool = peerstore.pool().cloned();
     let record = async move {
-        while let Some(failure) = failures.recv().await {
-            record_failure(&peerstore, failure).await;
-        }
+        let (lanes, queues): (Vec<_>, Vec<_>) = (0..RECORDER_LANES)
+            .map(|_| p2p::rt::mpsc::channel(RECORDER_LANE_DEPTH))
+            .unzip();
+        let recording = queues.into_iter().map(|mut queue| {
+            let peerstore = peerstore.clone();
+            async move {
+                while let Some(failure) = queue.recv().await {
+                    record_failure(&peerstore, failure).await;
+                }
+            }
+        });
+        let dispatching = async move {
+            while let Some(failure) = failures.recv().await {
+                if lanes[recorder_lane(&failure)].send(failure).await.is_err() {
+                    break;
+                }
+            }
+            // The lanes end once they have recorded what they hold.
+            drop(lanes);
+        };
+        futures::join!(dispatching, futures::future::join_all(recording));
     };
     #[cfg(not(target_arch = "wasm32"))]
     return workers::spawn_background(pool.as_ref(), "push failure recorder", move || record);
@@ -1501,6 +1548,86 @@ pub(crate) mod tests {
             .unwrap()
             .is_empty());
 
+        drop(tx);
+        task.await.unwrap();
+    }
+
+    #[test]
+    fn a_scope_always_takes_the_same_lane_and_scopes_spread_over_lanes() {
+        let scope = |peer: &str, doc: &str| p2p::sync::PushFailure {
+            peer_id: peer.to_string(),
+            doc_id: doc.to_string(),
+            ..failure(false)
+        };
+        assert_eq!(
+            recorder_lane(&scope("peer-a", "doc-a")),
+            recorder_lane(&scope("peer-a", "doc-a"))
+        );
+        let lanes: RapidHashSet<usize> = (0..64)
+            .map(|index| recorder_lane(&scope(&format!("peer-{index}"), "doc-a")))
+            .collect();
+        assert!(lanes.len() > RECORDER_LANES / 2, "{lanes:?}");
+        assert!(lanes.iter().all(|lane| *lane < RECORDER_LANES));
+    }
+
+    #[nuclei::test]
+    async fn registrations_for_many_peers_at_once_are_each_recorded_then_cleared_in_order() {
+        let store = Arc::new(storage::backends::RegolithStore::in_memory().unwrap());
+        let peerstore = storage::stores::Peerstore::new(Arc::clone(&store));
+        let peers: Vec<String> = (0..24).map(|index| format!("peer-{index}")).collect();
+        for peer in &peers {
+            let replicator = p2p::ReplicatorInfo::from_raw(
+                peer.clone(),
+                vec!["collection-a".to_string()],
+                Vec::new(),
+            );
+            peerstore
+                .create_replicator(peer, &replicator.to_bytes().unwrap())
+                .await
+                .unwrap();
+        }
+        // A pool of its own: the process's default pool may be another
+        // test's, and stop with it.
+        let pool = workers::Pool::start(workers::Config::unplaced(1)).unwrap();
+        let (tx, rx) = nuclei::sync::mpsc::channel(4);
+        let task = spawn_failure_recorder(
+            storage::stores::Peerstore::new(Arc::clone(&store)).placed_on(Some(&pool)),
+            rx,
+        );
+        let send = |peer: String, acknowledged: bool, generation: Option<u64>| {
+            let tx = tx.clone();
+            async move {
+                let (durable_tx, durable_rx) = nuclei::sync::oneshot::channel();
+                let mut event = failure(acknowledged);
+                event.peer_id = peer;
+                event.marker_generation = generation;
+                event.durable_tx = Some(durable_tx);
+                tx.send(event).await.unwrap();
+                durable_rx.await.unwrap()
+            }
+        };
+        let generations =
+            futures::future::join_all(peers.iter().map(|peer| send(peer.clone(), false, None)))
+                .await;
+        for (peer, generation) in peers.iter().zip(&generations) {
+            assert!(generation.is_some(), "{peer} has no marker");
+            assert_eq!(peerstore.get_retry_documents(peer).await.unwrap().len(), 1);
+        }
+        let cleared = futures::future::join_all(
+            peers
+                .iter()
+                .zip(&generations)
+                .map(|(peer, generation)| send(peer.clone(), true, *generation)),
+        )
+        .await;
+        assert_eq!(cleared, generations);
+        for peer in &peers {
+            assert!(peerstore
+                .get_retry_documents(peer)
+                .await
+                .unwrap()
+                .is_empty());
+        }
         drop(tx);
         task.await.unwrap();
     }
