@@ -3564,7 +3564,7 @@ pub const PROPERTIES: &[Property] = &[
         // is assumed, not modeled. INV_RefusedOnlyOverItsOwnValue is the
         // house rule the code breaks today (a validated unique-eq filter
         // read): only Red_FilterReadDecides and Red_FilterReadDecidesNil
-        // check it, and both must fail.
+        // check it, run as DEFECT (known defect, no planted bug) in run-all.sh.
         family: "Client transaction isolation",
         name: "INV_AtMostOnePerNonNilValue / INV_LoserLeavesNothing / INV_LoserRefusedTyped / INV_NoIndexNotRefused / INV_NilNotRefused / INV_RefusedOnlyOverItsOwnValue",
         axis: Tla,

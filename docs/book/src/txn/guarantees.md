@@ -48,7 +48,7 @@ modeled by `proofs/tla/ClientUniqueAdmission.tla`; the words and codes by
   or a non-indexed filter of the same shape commits. It hits a transaction that writes
   nil the same way. This is not part of the guarantee;
   `known_defect_a_unique_filter_read_aborts_the_commit`,
-  `known_defect_a_nil_writers_filter_read_aborts_the_commit` and the RED model
+  `known_defect_a_nil_writers_filter_read_aborts_the_commit` and the known-defect (DEFECT) model
   configurations `MC_ClientUniqueAdmission_Red_FilterReadDecides` and
   `MC_ClientUniqueAdmission_Red_FilterReadDecidesNil` pin today's answer so its fix is seen.
   Go aborts here too.

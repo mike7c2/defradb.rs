@@ -5,7 +5,8 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# rows: <cfg> <module> <GREEN|RED|TRACE:<depth>|DEADLOCK:<l>>
+# rows: <cfg> <module> <GREEN|RED|DEFECT|TRACE:<depth>|DEADLOCK:<l>>
+# DEFECT marks a configuration of today's code that fails on a known defect.
 # A trace replay walks one path, so its verdict also says where it ends:
 # TRACE:<depth> finds no error from exactly one initial state and walks every
 # event to the settled rest (depth = events + 1), and DEADLOCK:<l> stops with
@@ -583,8 +584,8 @@ RUNS=(
   "MC_ClientUniqueAdmission_Red_LoserLeavesEntry.cfg ClientUniqueAdmission.tla RED" # a lost commit keeps its entry (INV_LoserLeavesNothing)
   "MC_ClientUniqueAdmission_Red_RerunReusesDecision.cfg ClientUniqueAdmission.tla RED" # the re-run keeps its first check (INV_AtMostOnePerNonNilValue)
   "MC_ClientUniqueAdmission_Red_NilChecked.cfg ClientUniqueAdmission.tla RED" # nil checked as a value (INV_NilNotRefused)
-  "MC_ClientUniqueAdmission_Red_FilterReadDecides.cfg ClientUniqueAdmission.tla RED" # today's code: a filter read of another value aborts the commit (INV_RefusedOnlyOverItsOwnValue)
-  "MC_ClientUniqueAdmission_Red_FilterReadDecidesNil.cfg ClientUniqueAdmission.tla RED" # today's code: a nil writer's filter read of "v" aborts its commit (INV_RefusedOnlyOverItsOwnValue)
+  "MC_ClientUniqueAdmission_Red_FilterReadDecides.cfg ClientUniqueAdmission.tla DEFECT" # known defect, no planted bug: today's code, a filter read of another value aborts the commit (INV_RefusedOnlyOverItsOwnValue)
+  "MC_ClientUniqueAdmission_Red_FilterReadDecidesNil.cfg ClientUniqueAdmission.tla DEFECT" # known defect, no planted bug: today's code, a nil writer's filter read of "v" aborts its commit (INV_RefusedOnlyOverItsOwnValue)
   "MC_IndexInTxn_Green.cfg IndexInTxn.tla GREEN" # #2374 follow-up: an index created or dropped in a txn is staged in it, listed in it, built after commit before the commit returns
   "MC_IndexInTxn_Red_WriteOutside.cfg IndexInTxn.tla RED" # the change commits on its own (INV_IsolatedUntilCommit)
   "MC_IndexInTxn_Red_EarlyBackfill.cfg IndexInTxn.tla RED" # backfill at create, before commit (INV_WorkOnlyAfterCommit)
@@ -1499,6 +1500,10 @@ run_model() {
       elif grep -qE "is violated|was violated|properties were violated|Deadlock reached|Deadlock" <<<"$out"; then got=RED
       else got=ERROR; fi ;;
   esac
+  # DEFECT: the configuration models today's code and fails on a known defect,
+  # with no bug planted. It is expected to violate, like RED, and turns GREEN
+  # once the defect is fixed.
+  if [ "$want" = DEFECT ] && [ "$got" = RED ]; then got=DEFECT; fi
   if [ "$got" = "$want" ]; then
     printf "  ok   %-6s %-34s %s\n" "$got" "$cfg" "$mod"
   else
