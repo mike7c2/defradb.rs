@@ -28,12 +28,17 @@ What must never happen:
 - two empty arrays clash in a unique index (`empty_arrays_never_clash`);
 - with `_all` on two paths of one JSON index, the scan reads one path and the
   marker lookup another, so a match whose scanned array is `[]` is lost
-  (`same_path_scan_complete`).
+  (`same_path_scan_complete`);
+- a full scan reads one path but tests its values with the `_like` pattern of
+  another path's condition, so a match is lost (`pinned_scan_complete`).
 
 The RED side: with the old writer, which stored `[]` as null, the same scan
 misses an empty array that matches (`neg_null_writer_misses_empty`). A scan
 that reads one path but looks the marker up at another misses
-`{"a": [1], "b": []}` (`neg_split_paths_miss_empty`).
+`{"a": [1], "b": []}` (`neg_split_paths_miss_empty`). A scan that reads the
+last condition's path but tests the first condition's pattern misses
+`{"a": "xa", "b": 5}` under `{a: {_like: "x%"}, b: {_ne: 25}}`
+(`neg_mixed_scan_misses`).
 
 Rust anchors:
 - the writer: `IndexManager::expand_value_for_indexing`
@@ -44,6 +49,8 @@ Rust anchors:
 - the skip: `RangeIterator::next` (`crates/engine/storage/src/index/range_iterator.rs`),
   which drops the marker from every bounded scan, and `full_field_range`, which
   makes the `_ne` and `_like` scans bounded ones;
+- the pinned path: `filter_to_index_scan`, where the first `_ne`, `_nin` or
+  `_like` condition gives the scan both its path and its value filter;
 - the unique exemption: `skips_uniqueness` (`crates/engine/storage/src/index/mod.rs`).
 -/
 
@@ -276,6 +283,90 @@ theorem neg_split_paths_miss_empty :
   -- both sides are literal; Lean computes them
   decide
 
+-- One condition of a full index scan: the JSON path it reads and the test its
+-- values must pass, a `_like` pattern or a `_ne`.
+structure Cond (P V : Type) where
+  -- the path the condition names
+  path : P
+  -- what a value at that path must pass
+  test : V → Bool
+
+-- A document passes every condition, each at its own path.
+def passesAll {P V : Type} (doc : P → V) (cs : List (Cond P V)) : Bool :=
+  -- each condition checks the value at its own path
+  cs.all (fun c => c.test (doc c.path))
+
+-- The shipped scan: the first condition gives both the path and the test.
+def pinnedScan {P V : Type} (doc : P → V) : List (Cond P V) → Bool
+  -- no condition: the scan keeps everything
+  | [] => true
+  -- the first condition's test on the first condition's path
+  | c :: _ => c.test (doc c.path)
+
+-- The broken scan: the path of the second condition, the test of the first.
+def mixedScan {P V : Type} (doc : P → V) : List (Cond P V) → Bool
+  -- two conditions: the test of one at the path of the other
+  | c :: d :: _ => c.test (doc d.path)
+  -- fewer: the same as the shipped scan
+  | cs => pinnedScan doc cs
+
+/-- When the scan's path and its value test come from one condition, every
+    document passing all conditions is kept; the filter checks the others. -/
+theorem pinned_scan_complete {P V : Type} (doc : P → V) (cs : List (Cond P V))
+    -- the document passes every condition
+    (h : passesAll doc cs = true) :
+    -- the scan keeps it
+    pinnedScan doc cs = true := by
+  -- split on whether there is a first condition
+  cases cs with
+  -- none: the scan keeps everything
+  | nil => rfl
+  -- one: it is among the conditions the document passes
+  | cons c rest =>
+    -- the first condition holds on its own
+    simp only [passesAll, List.all_cons, Bool.and_eq_true] at h
+    -- and the scan is that condition
+    exact h.1
+
+-- The values in the RED example: a string at `a`, a number at `b`.
+inductive Val where
+  -- a string value, as its characters
+  | str (s : List Char)
+  -- a number value
+  | num (n : Nat)
+  deriving DecidableEq
+
+-- `_like: "x%"`: a string starting with `x`.
+def likeX : Val → Bool
+  -- a string passes when it starts with `x`
+  | .str ('x' :: _) => true
+  -- any other string, and a number, does not match
+  | _ => false
+
+-- `_ne: 25`: anything but the number 25.
+def ne25 : Val → Bool
+  -- 25 fails
+  | .num 25 => false
+  -- everything else passes
+  | _ => true
+
+-- `{"a": "xa", "b": 5}`, with `true` standing for path `a`.
+def doc : Bool → Val
+  -- path `a` holds "xa"
+  | true => .str ['x', 'a']
+  -- path `b` holds 5
+  | false => .num 5
+
+/-- RED: reading path `b` but testing `a`'s pattern misses `{"a": "xa", "b": 5}`,
+    which passes `{a: {_like: "x%"}, b: {_ne: 25}}`. -/
+theorem neg_mixed_scan_misses :
+    -- the document passes both conditions
+    passesAll doc [⟨true, likeX⟩, ⟨false, ne25⟩] = true
+    -- but the mixed scan drops it
+    ∧ mixedScan doc [⟨true, likeX⟩, ⟨false, ne25⟩] = false := by
+  -- both sides are literal; Lean computes them
+  decide
+
 end AllScanEmptyArray
 
 #print axioms AllScanEmptyArray.all_scan_complete
@@ -288,3 +379,5 @@ end AllScanEmptyArray
 #print axioms AllScanEmptyArray.neg_null_writer_misses_empty
 #print axioms AllScanEmptyArray.same_path_scan_complete
 #print axioms AllScanEmptyArray.neg_split_paths_miss_empty
+#print axioms AllScanEmptyArray.pinned_scan_complete
+#print axioms AllScanEmptyArray.neg_mixed_scan_misses
