@@ -1,13 +1,7 @@
-//! A store written with the old DateTime index encoding is rebuilt on open.
-//!
-//! The encoding changed from one varint of nanoseconds to a marker plus
-//! separate seconds and nanos varints. Nothing rebuilt those entries before:
-//! the existing reindex path is driven by schema migration, not by a storage
-//! format change. An upgraded store therefore answered range queries with
-//! new-format bounds against old-format entries, so rows went missing, deletes
-//! orphaned their entries, and unique indexes stopped rejecting duplicates.
+//! Opening a store upgrades older secondary-index encodings.
 
 use db::definition::migration::format::CURRENT_INDEX_FORMAT;
+use schema::{CollectionVersion, FieldDescription, FieldKind};
 use storage::RegolithStore;
 
 /// The marker byte every encoded time key starts with, per `encoding::mod`.
@@ -35,8 +29,8 @@ fn the_old_and_new_encodings_differ() {
     assert_ne!(new, old, "a rebuild is only needed if the bytes differ");
 }
 
-/// Opening a store with no format stamp rebuilds and then stamps it, so the
-/// second open finds the store current instead of rebuilding again.
+/// Opening a new store with no format stamp stamps it, so the second open
+/// finds the store current.
 #[test]
 fn an_unstamped_store_is_stamped_on_open() {
     workers::block_on(async {
@@ -76,6 +70,167 @@ fn a_fresh_store_opens_clean() {
     .unwrap()
 }
 
+fn simple_schema() -> CollectionVersion {
+    CollectionVersion::new(
+        "Tallies",
+        "tallies-v1",
+        "tallies-collection",
+        vec![
+            FieldDescription::new(
+                "1",
+                "_docID",
+                FieldKind::doc_id(),
+                schema::CType::LwwRegister,
+            ),
+            FieldDescription::new("2", "count", FieldKind::int(), schema::CType::LwwRegister),
+        ],
+    )
+}
+
+/// Older and unstamped stores are rebuilt and stamped on open.
+#[test]
+fn older_index_formats_are_upgraded() {
+    workers::block_on(async {
+        for format in [None, Some(1u32), Some(2), Some(3), Some(4)] {
+            let store = RegolithStore::in_memory().unwrap();
+            let db = db::DB::open(store.clone()).await.unwrap();
+            db.create_collection(simple_schema()).await.unwrap();
+            let txn = db.new_txn(false).await.unwrap();
+            let systemstore = txn.systemstore().unwrap();
+            match format {
+                Some(format) => systemstore
+                    .set(
+                        db::definition::migration::format::INDEX_FORMAT_KEY,
+                        &format.to_be_bytes(),
+                    )
+                    .await
+                    .unwrap(),
+                None => systemstore
+                    .delete(db::definition::migration::format::INDEX_FORMAT_KEY)
+                    .await
+                    .unwrap(),
+            }
+            drop(systemstore);
+            txn.commit().await.unwrap();
+            drop(db);
+            let db = db::DB::open(store).await.unwrap();
+            assert_eq!(
+                db.stored_index_format().await.unwrap(),
+                Some(CURRENT_INDEX_FORMAT)
+            );
+            assert!(db.require_collection("Tallies").is_ok());
+        }
+    })
+    .unwrap()
+}
+
+/// A future format cannot be interpreted by this build.
+#[test]
+fn future_index_format_is_refused() {
+    workers::block_on(async {
+        let store = RegolithStore::in_memory().unwrap();
+        let db = db::DB::open(store.clone()).await.unwrap();
+        let txn = db.new_txn(false).await.unwrap();
+        txn.systemstore().unwrap().set(db::definition::migration::format::INDEX_FORMAT_KEY, &(CURRENT_INDEX_FORMAT + 1).to_be_bytes()).await.unwrap();
+        txn.commit().await.unwrap();
+        drop(db);
+        assert!(matches!(db::DB::open(store).await, Err(db::Error::UnsupportedIndexFormat { stored: Some(format), .. }) if format == CURRENT_INDEX_FORMAT + 1));
+    }).unwrap()
+}
+
+/// A rebuild never treats a legacy key under /i/ as a new index entry.
+#[test]
+fn upgrade_rebuilds_entries_without_deleting_legacy_keys() {
+    use db::AutoCommitMutator;
+    use document::{Document, NormalValue};
+    use query::DocMutator;
+    use schema::IndexDescription;
+    use std::sync::Arc;
+    use storage::corekv::{IterOptions, Iterator as _};
+    use storage::keys::IndexDataStoreKey;
+
+    workers::block_on(async {
+        let store = RegolithStore::in_memory().unwrap();
+        let db = Arc::new(db::DB::open(store.clone()).await.unwrap());
+        let schema =
+            simple_schema().with_index(IndexDescription::new("counts").with_field("count", false));
+        db.create_collection(schema.clone()).await.unwrap();
+        let collection = db.require_collection("Tallies").unwrap();
+        let prefix = IndexDataStoreKey::index_prefix(
+            collection.resolved_root_id(),
+            collection.schema().indexes[0].id,
+        );
+        let mut doc = Document::new(schema);
+        doc.set("count", NormalValue::Int(42)).unwrap();
+        AutoCommitMutator::new(db.clone())
+            .create("Tallies", doc)
+            .await
+            .unwrap();
+        let txn = db.new_txn(false).await.unwrap();
+        let data = txn.datastore().unwrap();
+        let mut iter = data
+            .iterator(IterOptions::new().with_prefix(prefix.clone()))
+            .await
+            .unwrap();
+        let entry = iter.next().await.unwrap().unwrap();
+        iter.close().await.unwrap();
+        drop(iter);
+        data.delete(&entry.key).await.unwrap();
+        data.set(b"/i/pk/legacy", b"preserve").await.unwrap();
+        txn.systemstore()
+            .unwrap()
+            .set(
+                db::definition::migration::format::INDEX_FORMAT_KEY,
+                &3u32.to_be_bytes(),
+            )
+            .await
+            .unwrap();
+        let system = txn.systemstore().unwrap();
+        system.set(b"/reindex/owed/tallies-collection", br#"{"token":17,"migration_destination":null}"#).await.unwrap();
+        system.set(b"/reindex/progress/tallies-collection", br#"{"token":17,"stage":{"Walk":{"fence":null,"last":18446744073709551615}},"deferred":[]}"#).await.unwrap();
+        drop(system);
+        drop(data);
+        txn.commit().await.unwrap();
+        drop(db);
+        let db = db::DB::open(store).await.unwrap();
+        let txn = db.new_txn(true).await.unwrap();
+        let data = txn.datastore().unwrap();
+        assert_eq!(
+            data.get(b"/i/pk/legacy").await.unwrap().unwrap().as_ref(),
+            b"preserve"
+        );
+        let mut iter = data
+            .iterator(IterOptions::new().with_prefix(prefix))
+            .await
+            .unwrap();
+        assert!(iter.next().await.unwrap().is_some());
+        assert!(iter.next().await.unwrap().is_none());
+        iter.close().await.unwrap();
+    })
+    .unwrap()
+}
+
+/// A collection created through a constructor that skips the open sequence is
+/// stamped in its creation transaction, so a later open does not mistake it
+/// for a legacy unstamped store.
+#[test]
+fn a_collection_created_without_open_is_reopenable() {
+    workers::block_on(async {
+        let store = RegolithStore::in_memory().unwrap();
+        let db = db::DB::new(store.clone()).expect("construct");
+        db.create_collection(simple_schema()).await.expect("schema");
+        drop(db);
+
+        let db = db::DB::open(store).await.expect("reopen");
+        assert_eq!(
+            db.stored_index_format().await.expect("read the stamp"),
+            Some(CURRENT_INDEX_FORMAT)
+        );
+        assert!(db.require_collection("Tallies").is_ok());
+    })
+    .unwrap()
+}
+
 /// The concrete failure a rebuild prevents: an entry written with the old
 /// encoding falls outside the bounds a range query builds with the new one, so
 /// the row is invisible rather than merely slow to find.
@@ -108,9 +263,9 @@ fn an_old_format_entry_falls_outside_new_format_range_bounds() {
     );
 }
 
-/// The JSON path `height` with 180 at it, in the layout a format-3 build wrote:
-/// a property step had no bytes marker, and a descending key inverted its path.
-fn format_three_json_leaf(descending: bool) -> Vec<u8> {
+/// The JSON path `height` with 180 at it, in the layout before format 5: a
+/// property step had no bytes marker, and a descending key inverted its path.
+fn old_json_leaf(descending: bool) -> Vec<u8> {
     let mut path = b"height".to_vec();
     path.extend_from_slice(&[0x00, 0x01, 0x01, b'/']);
     if descending {
@@ -121,10 +276,16 @@ fn format_three_json_leaf(descending: bool) -> Vec<u8> {
     }
 }
 
-/// Opening a format-3 store rebuilds its JSON indexes, ascending and
-/// descending, and its empty array entries, which format 3 wrote as nulls.
+/// Opening a format-3 or format-4 store rebuilds its JSON indexes, ascending
+/// and descending, and its empty array entries, which both wrote as nulls.
 #[test]
-fn a_format_three_store_rebuilds_json_and_empty_array_entries() {
+fn an_older_store_rebuilds_json_and_empty_array_entries() {
+    for stamp in [3u32, 4] {
+        older_store_rebuilds_json_and_empty_array_entries(stamp);
+    }
+}
+
+fn older_store_rebuilds_json_and_empty_array_entries(stamp: u32) {
     use std::sync::Arc;
 
     use db::definition::migration::format::INDEX_FORMAT_KEY;
@@ -186,10 +347,10 @@ fn a_format_three_store_rebuilds_json_and_empty_array_entries() {
         let encode = |value: &NormalValue, descending| {
             storage::field_value::encode_field_value(Vec::new(), value, descending).unwrap()
         };
-        // Each field's current value bytes and the format-3 bytes that replace them.
+        // Each field's current value bytes and the older bytes that replace them.
         let swaps = [
-            ("up", encode(&leaf, false), format_three_json_leaf(false)),
-            ("down", encode(&leaf, true), format_three_json_leaf(true)),
+            ("up", encode(&leaf, false), old_json_leaf(false)),
+            ("down", encode(&leaf, true), old_json_leaf(true)),
             (
                 "numbers",
                 encode(&NormalValue::EmptyArray, false),
@@ -232,17 +393,17 @@ fn a_format_three_store_rebuilds_json_and_empty_array_entries() {
         drop(datastore);
         txn.systemstore()
             .unwrap()
-            .set(INDEX_FORMAT_KEY, &3u32.to_be_bytes())
+            .set(INDEX_FORMAT_KEY, &stamp.to_be_bytes())
             .await
             .unwrap();
         txn.commit().await.unwrap();
 
-        // The old entries are what a format-3 store holds: these queries miss on them.
+        // The old entries are what an older store holds: these queries miss on them.
         for (request, expected) in &cases {
             let result = query(db.clone(), request).await;
             assert!(
                 !result.errors.is_empty() || result.data.as_ref() != Some(expected),
-                "{request} must not see format-3 entries as current"
+                "{request} must not see older entries as current"
             );
         }
         drop(db);
@@ -262,7 +423,7 @@ fn a_format_three_store_rebuilds_json_and_empty_array_entries() {
         for key in &old_keys {
             assert!(
                 datastore.get(key).await.unwrap().is_none(),
-                "the rebuild removes the format-3 entries"
+                "the rebuild removes the older entries"
             );
         }
         drop(datastore);
@@ -271,10 +432,16 @@ fn a_format_three_store_rebuilds_json_and_empty_array_entries() {
     .unwrap();
 }
 
-/// A format-3 build that stopped a full reindex after a walk page left that
-/// page's documents in format-3 keys. The format-4 open must not resume past them.
+/// An older build that stopped a full reindex after a walk page left that
+/// page's documents in old keys. The current open must not resume past them.
 #[test]
-fn a_format_three_walk_page_is_not_resumed() {
+fn an_older_walk_page_is_not_resumed() {
+    for stamp in [3u32, 4] {
+        older_walk_page_is_not_resumed(stamp);
+    }
+}
+
+fn older_walk_page_is_not_resumed(stamp: u32) {
     use std::sync::Arc;
 
     use db::definition::migration::format::INDEX_FORMAT_KEY;
@@ -335,12 +502,12 @@ fn a_format_three_walk_page_is_not_resumed() {
         let suffix = key[prefix.len()..]
             .strip_prefix(current.as_slice())
             .unwrap();
-        let old_key = [prefix.as_slice(), &format_three_json_leaf(false), suffix].concat();
+        let old_key = [prefix.as_slice(), &old_json_leaf(false), suffix].concat();
         datastore.delete(key).await.unwrap();
         datastore.set(&old_key, value).await.unwrap();
         drop(datastore);
 
-        // What the format-3 build left: a reindex owed and walked past John.
+        // What the older build left: a reindex owed and walked past John.
         let systemstore = txn.systemstore().unwrap();
         let collection_id = collection.collection_id();
         systemstore
@@ -358,7 +525,7 @@ fn a_format_three_walk_page_is_not_resumed() {
             .await
             .unwrap();
         systemstore
-            .set(INDEX_FORMAT_KEY, &3u32.to_be_bytes())
+            .set(INDEX_FORMAT_KEY, &stamp.to_be_bytes())
             .await
             .unwrap();
         drop(systemstore);
@@ -384,7 +551,7 @@ fn a_format_three_walk_page_is_not_resumed() {
                 .await
                 .unwrap()
                 .is_none(),
-            "the rebuild removes the format-3 entry"
+            "the rebuild removes the older entry"
         );
         txn.discard().unwrap();
     })
