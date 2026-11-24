@@ -1404,6 +1404,13 @@ RUNS=(
   "MC_DocTopicIngress_Red_NoCheck.cfg DocTopicIngress.tla RED" # the code before (#2545): an update after the unsubscribe is applied (INV_NoApplyAfterUnsubscribe)
   "MC_DocTopicIngress_Red_OwnSet.cfg DocTopicIngress.tla RED" # the handler checks a set the unsubscribe never clears (INV_NoApplyAfterUnsubscribe)
   "MC_DocTopicIngress_Red_NoCollection.cfg DocTopicIngress.tla RED" # a followed collection does not admit the document's topic (INV_FollowedApplies)
+  "MC_DocSyncCompletion_Green.cfg DocSyncCompletion.tla GREEN" # a sync is complete only once every asked document merged, however often a merge is reported, and waits no longer
+  "MC_DocSyncCompletion_Green_OnePeer.cfg DocSyncCompletion.tla GREEN" # the same with the one peer of the defect's report
+  "MC_DocSyncCompletion_Red_CountReports.cfg DocSyncCompletion.tla RED" # the code before, one peer: a merge reported twice counts as two documents (INV_CompleteMeansEveryDocMerged)
+  "MC_DocSyncCompletion_Red_CountPerPeer.cfg DocSyncCompletion.tla RED" # the code before, two peers: every document reported and the sync still waits for a report per peer (INV_DoneOnceEveryDocReported)
+  "MC_DocSyncCompletion_Red_AnyDoc.cfg DocSyncCompletion.tla RED" # a report for a document not asked for joins the set (INV_CompleteMeansEveryDocMerged)
+  "MC_DocSyncCompletion_Red_PeerHeadWitness.cfg DocSyncCompletion.tla RED" # witness, no bug: complete while a second peer's other head of a document is still on its way (INV_EveryPeersHeadMerged)
+  "MC_DocSyncCompletion_Red_OkAfterTimeoutWitness.cfg DocSyncCompletion.tla RED" # witness, no bug: a timeout ends the sync with a document missing and the caller is told Ok (INV_OkMeansEveryDocMerged)
   "MC_NodeShutdown_Red_RequestsDuringP2P.cfg NodeShutdown.tla RED" # requests still admitted while P2P stops commit without a head marker
   "MC_NodeShutdown_Red_CommitNotAdmitted.cfg NodeShutdown.tla RED" # an in-process commit outside the request scope commits after P2P stopped
   "MC_NodeShutdown_Red_OpenTransaction.cfg NodeShutdown.tla RED" # a transaction left open (a commit refused at shutdown) holds regolith's close for its timeout
