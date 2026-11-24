@@ -168,6 +168,32 @@ where
             return Err(format!("unsupported op: {}", failure.message));
         }
     }
+    if let Some(code) = action.expected_error_code() {
+        if reports_codes(state.client_type()) {
+            check_code::<A>(&outcome, code)?;
+        }
+    }
+    let expects_error = action.expected_error().is_some() || action.expected_error_code().is_some();
+    if let Some(wanted) = action.expected_error() {
+        let matched = match &outcome {
+            Err(failure) => failure.message.contains(wanted),
+            Ok(value) => A::GRAPHQL && graphql_errors(value).iter().any(|m| m.contains(wanted)),
+        };
+        if !matched {
+            return Err(format!(
+                "expected error containing {wanted:?}; got {}",
+                describe(&outcome)
+            ));
+        }
+    } else if action.expected_error_code().is_some() {
+        let errored = match &outcome {
+            Err(_) => true,
+            Ok(value) => A::GRAPHQL && !graphql_errors(value).is_empty(),
+        };
+        if !errored {
+            return Err(format!("expected an error; got {}", describe(&outcome)));
+        }
+    }
     if common.envelope {
         let envelope = match outcome {
             Ok(value) => json!({"result": value, "error": ""}),
@@ -175,30 +201,8 @@ where
         };
         return match_envelope(state, common, &envelope, expected.as_ref());
     }
-    if let Some(code) = action.expected_error_code() {
-        if reports_codes(state.client_type()) {
-            check_code::<A>(&outcome, code)?;
-        }
-    }
-    if let Some(wanted) = action.expected_error() {
-        let matched = match &outcome {
-            Err(failure) => failure.message.contains(wanted),
-            Ok(value) => A::GRAPHQL && graphql_errors(value).iter().any(|m| m.contains(wanted)),
-        };
-        return match matched {
-            true => Ok(()),
-            false => Err(format!(
-                "expected error containing {wanted:?}; got {}",
-                describe(&outcome)
-            )),
-        };
-    }
-    if action.expected_error_code().is_some() {
-        return match outcome {
-            Err(_) => Ok(()),
-            Ok(value) if A::GRAPHQL && !graphql_errors(&value).is_empty() => Ok(()),
-            Ok(value) => Err(format!("expected an error; got response {value}")),
-        };
+    if expects_error {
+        return Ok(());
     }
     let actual = outcome.map_err(|failure| failure.message)?;
     if A::GRAPHQL && !graphql_errors(&actual).is_empty() {
