@@ -133,6 +133,9 @@ lean_lib SingleFlight where
 lean_lib CommitFence where
 
 @[default_target]
+lean_lib CommitResponseWait where
+
+@[default_target]
 lean_lib HistoryTurns where
 
 @[default_target]
@@ -254,6 +257,9 @@ lean_lib AllScanEmptyArray where
 
 @[default_target]
 lean_lib RelationFilterNoChild where
+
+@[default_target]
+lean_lib JoinFetchedParent where
 
 @[default_target]
 lean_lib CommitsDepthCast where
@@ -388,6 +394,9 @@ lean_lib BackupImportSigner where
 lean_lib FloatEquality where
 
 @[default_target]
+lean_lib MigratedCounterMerge where
+
+@[default_target]
 lean_lib OwedParts where
 
 @[default_target]
@@ -407,6 +416,9 @@ lean_lib SeTruncatePrefix where
 
 @[default_target]
 lean_lib ReplicatorEmptyCollections where
+
+@[default_target]
+lean_lib ExplainIndexName where
 
 @[default_target]
 lean_lib PendingKeyArrival where
