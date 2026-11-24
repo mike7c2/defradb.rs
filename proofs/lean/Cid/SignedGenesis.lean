@@ -46,9 +46,15 @@ Rust owners:
   crates/database/db/src/write/create.rs `compute` (an attempt reuses the
   prepared blocks when the schema and short ID still match).
 * crates/database/db/src/merge/merge_handler/doc_identity.rs
-  `resolve_composite_doc_id` (a peer derives the ID from the genesis CID) and
-  crates/building-blocks/bitswap/src/message/mod.rs `verify_hash` (a block is
-  kept only when it hashes to its CID).
+  `resolve_composite_doc_id` (a peer derives the ID from the genesis CID),
+  and the hash check on each way a block arrives, which keeps a block only
+  when it hashes to its CID: crates/engine/blockstore/src/verify.rs
+  `verify_block_cid`, run on a replicator push
+  (crates/database/p2p/src/sync/manager/process/pushlog.rs
+  `process_block_inner`, the usual way a fresh genesis reaches a peer), on
+  gossip, block sync and CAR fetch; and
+  crates/building-blocks/bitswap/src/message/mod.rs `verify_hash` on a
+  bitswap fetch.
 * crates/database/db/src/definition/migration/shortid.rs
   `resolve_legacy_identities` (a legacy ID moves to its genesis's ID and
   stays as an alias).
@@ -384,10 +390,13 @@ theorem client_unchecked_commits_another_id (w : World)
   -- Peel the `some`: two different blocks would share an ID.
   exact different_genesis_different_id w hC hId _ _ hg (Option.some.inj heq)
 
--- A peer merge: the peer asks for the creator's head `asked` and receives a
--- block. Bitswap keeps it only when its bytes hash to the CID it came under
--- (bitswap message/mod.rs `verify_hash`), and `resolve_composite_doc_id`
--- (merge_handler/doc_identity.rs) derives the ID from that CID.
+-- A peer merge: a block reaches the peer under a CID `asked`, either one the
+-- sender announced (a replicator push, gossip) or one the peer requested
+-- (block sync, CAR fetch, bitswap). Both arrivals keep the block only when its
+-- bytes hash to that CID: blockstore verify.rs `verify_block_cid` (called from
+-- pushlog.rs `process_block_inner` on a push) and bitswap message/mod.rs
+-- `verify_hash`. `resolve_composite_doc_id` (merge_handler/doc_identity.rs)
+-- then derives the ID from that CID. This rule covers every arrival path.
 def peerCommitted (w : World) (asked : Address) (received : Composite) : Option DocId :=
   -- A block that does not hash to the CID asked for is dropped.
   if w.addrC received = asked then some (w.docIdOf (w.addrC received)) else none
