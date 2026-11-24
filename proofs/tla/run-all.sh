@@ -341,6 +341,11 @@ RUNS=(
   "MC_StorageFailure_Red_LostCause.cfg StorageFailure.tla RED"
   "MC_StorageFailure_Red_Text.cfg StorageFailure.tla RED"
   "MC_StorageFailure_Red_Retry.cfg StorageFailure.tla RED"
+  "MC_CommitOutcome_Green.cfg CommitOutcome.tla GREEN" # no client concludes aborted for a write on disk, or committed for one that is not
+  "MC_CommitOutcome_Red_FailureAborted.cfg CommitOutcome.tla RED" # an I/O failure at commit is answered aborted (INV_AbortedMeansNothingLanded)
+  "MC_CommitOutcome_Red_RetainAborted.cfg CommitOutcome.tla RED" # the registry retains aborted for a failure that may have landed (INV_AbortedMeansNothingLanded)
+  "MC_CommitOutcome_Red_NotFoundAborted.cfg CommitOutcome.tla RED" # a not-found commit is answered aborted with no abort retained (INV_AbortedMeansNothingLanded)
+  "MC_CommitOutcome_Red_RefusalIndeterminate.cfg CommitOutcome.tla RED" # a refusal before apply is answered indeterminate (INV_RefusalIsAborted)
   "MC_UnifiedAccess_Green.cfg OwnerObservation.tla GREEN"
   "MC_UnifiedAccess_Red_Actor.cfg OwnerObservation.tla RED"
   "MC_UnifiedAccess_Red_Bound.cfg OwnerObservation.tla RED"

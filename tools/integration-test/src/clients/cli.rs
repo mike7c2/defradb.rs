@@ -49,7 +49,22 @@ impl State {
         identity: Option<u64>,
         args: &[&str],
     ) -> Result<Value, String> {
-        let url = self.url_on(name).map_err(|failure| failure.message)?;
+        self.defra_client_status_as(name, txn, identity, args)
+            .map_err(|failure| failure.stderr)
+    }
+
+    /// [`State::defra_client_as`], keeping the exit status of a failed run.
+    pub fn defra_client_status_as(
+        &self,
+        name: &str,
+        txn: Option<usize>,
+        identity: Option<u64>,
+        args: &[&str],
+    ) -> Result<Value, CliFailure> {
+        let url = self.url_on(name).map_err(|failure| CliFailure {
+            stderr: failure.message,
+            status: None,
+        })?;
         let txn = self.txn_id(txn);
         let key = identity.map(crate::scenario::identity::private_key_hex);
         let mut all = Vec::with_capacity(args.len() + 4);
@@ -68,7 +83,7 @@ impl State {
     /// it printed to stderr when it
     /// failed. The root directory holds no config, so only the defaults and
     /// `--url` apply.
-    fn defra_client(&self, url: &str, args: &[&str]) -> Result<Value, String> {
+    fn defra_client(&self, url: &str, args: &[&str]) -> Result<Value, CliFailure> {
         let binary = crate::rust_binary();
         let rootdir = std::env::temp_dir().join("defra-cli-client-no-config");
         let address = url.trim_start_matches("http://");
@@ -84,7 +99,18 @@ impl State {
             true => Ok(serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
                 Value::String(String::from_utf8_lossy(&output.stdout).trim().to_owned())
             })),
-            false => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+            false => Err(CliFailure {
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+                status: output.status.code(),
+            }),
         }
     }
+}
+
+/// A `defra client` run that failed: what it printed to stderr and its exit
+/// status (`None` when it was killed by a signal or never ran).
+#[derive(Clone, Debug)]
+pub struct CliFailure {
+    pub stderr: String,
+    pub status: Option<i32>,
 }

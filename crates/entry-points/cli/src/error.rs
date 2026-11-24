@@ -7,6 +7,25 @@ use thiserror::Error;
 /// CLI result type
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl Error {
+    /// The commit outcome the server answered with, or that the client
+    /// concluded for a write it got no answer to (`defra.txn.commit_outcome`).
+    pub fn commit_outcome(&self) -> Option<defra_core::CommitOutcome> {
+        match self {
+            Self::Reply { outcome, .. } => *outcome,
+            _ => None,
+        }
+    }
+
+    /// The wire code the server answered with, such as `STORAGE_FULL`.
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Reply { code, .. } => code.as_deref(),
+            _ => None,
+        }
+    }
+}
+
 /// CLI errors
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -120,6 +139,15 @@ pub enum Error {
 
     #[error("server returned error: {0}")]
     Server(String),
+
+    /// A server error that carried a wire code or a commit outcome, with the
+    /// same text as [`Error::Server`].
+    #[error("server returned error: {message}")]
+    Reply {
+        message: String,
+        code: Option<String>,
+        outcome: Option<defra_core::CommitOutcome>,
+    },
 
     #[error(transparent)]
     Documents(#[from] query::documents::Error),

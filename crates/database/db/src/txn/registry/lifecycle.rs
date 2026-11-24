@@ -62,6 +62,31 @@ impl<S: Store + 'static> DbTransactionRegistry<S> {
             }
         }
     }
+
+    /// A commit the owner could not take: `transaction not found`, with what
+    /// the registry retains about the transaction. Only a retained abort says
+    /// nothing committed; anything else (a commit retained, nothing retained,
+    /// a reply lost) may have (`defra.txn.commit_outcome.no_open_txn`).
+    fn commit_unavailable(
+        &self,
+        context: &RequestContext,
+        id: TxnId,
+        error: crate::txn::owner::Unavailable,
+        handle: &TransactionHandle,
+    ) -> TransactionError {
+        let error = unavailable(error, handle);
+        if !matches!(error, TransactionError::NotFound(_)) {
+            return error;
+        }
+        let retained = self
+            .owners()
+            .ok()
+            .and_then(|owners| owners.outcome(id, &self.caller(context)));
+        error.with_commit_outcome(match retained {
+            Some(crate::txn::owner::Outcome::Aborted) => defra_core::CommitOutcome::NotCommitted,
+            _ => defra_core::CommitOutcome::Indeterminate,
+        })
+    }
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
@@ -228,19 +253,19 @@ impl<S: Store + 'static> TransactionRegistry for DbTransactionRegistry<S> {
                 Box::pin(async move {
                     report_slow_phase("commit", "queue", queued);
                     let started = Instant::now();
-                    let result = owned.commit().await;
+                    let result = owned
+                        .commit()
+                        .await
+                        .map_err(|error| commit_error(&label, error));
                     if let Some(outcome) = outcome.as_ref() {
-                        match result {
-                            Ok(()) => crate::txn::owner::Outcome::Committed.store(outcome),
-                            Err(_) => crate::txn::owner::Outcome::Aborted.store(outcome),
-                        }
+                        crate::txn::owner::Outcome::of(&result).store(outcome);
                     }
                     report_slow_phase("commit", "execute", started);
-                    result.map_err(|error| commit_error(&label, error))
+                    result
                 })
             })
             .await
-            .map_err(|error| unavailable(error, handle))?
+            .map_err(|error| self.commit_unavailable(context, id, error, handle))?
     }
 
     async fn commit_unless_told_as(
@@ -268,21 +293,11 @@ impl<S: Store + 'static> TransactionRegistry for DbTransactionRegistry<S> {
                     let started = Instant::now();
                     let ending = match owned.commit_unless_told().await {
                         crate::txn::owner::Ending::Ended(result) => {
-                            match result {
-                                Ok(_) => {
-                                    if let Some(outcome) = outcome.as_ref() {
-                                        crate::txn::owner::Outcome::Committed.store(outcome);
-                                    }
-                                }
-                                Err(_) => {
-                                    if let Some(outcome) = outcome.as_ref() {
-                                        crate::txn::owner::Outcome::Aborted.store(outcome);
-                                    }
-                                }
+                            let result = result.map_err(|error| commit_error(&label, error));
+                            if let Some(outcome) = outcome.as_ref() {
+                                crate::txn::owner::Outcome::of(&result).store(outcome);
                             }
-                            crate::txn::owner::Ending::Ended(
-                                result.map_err(|error| commit_error(&label, error)),
-                            )
+                            crate::txn::owner::Ending::Ended(result)
                         }
                         crate::txn::owner::Ending::Kept(owned, result) => {
                             if let Some(outcome) = outcome.as_ref() {
@@ -299,7 +314,7 @@ impl<S: Store + 'static> TransactionRegistry for DbTransactionRegistry<S> {
                 })
             })
             .await
-            .map_err(|error| unavailable(error, handle))?
+            .map_err(|error| self.commit_unavailable(context, id, error, handle))?
     }
 
     async fn commit_confirmed_as(
@@ -323,24 +338,18 @@ impl<S: Store + 'static> TransactionRegistry for DbTransactionRegistry<S> {
             .map_err(|error| unavailable(error, handle))?
             .finish(id, &self.caller(context), move |owned| {
                 Box::pin(async move {
-                    owned
+                    let result = owned
                         .commit_confirmed(&confirmations)
                         .await
-                        .map_err(|error| commit_error(&label, error))
-                        .inspect(|()| {
-                            if let Some(outcome) = outcome.as_ref() {
-                                crate::txn::owner::Outcome::Committed.store(outcome);
-                            }
-                        })
-                        .inspect_err(|_| {
-                            if let Some(outcome) = outcome.as_ref() {
-                                crate::txn::owner::Outcome::Aborted.store(outcome);
-                            }
-                        })
+                        .map_err(|error| commit_error(&label, error));
+                    if let Some(outcome) = outcome.as_ref() {
+                        crate::txn::owner::Outcome::of(&result).store(outcome);
+                    }
+                    result
                 })
             })
             .await
-            .map_err(|error| unavailable(error, handle))?
+            .map_err(|error| self.commit_unavailable(context, id, error, handle))?
     }
 
     async fn add_collection_as(
@@ -820,12 +829,15 @@ impl<S: Store + 'static> TransactionRegistry for DbTransactionRegistry<S> {
                 crate::txn::owner::Outcome::Committing => TransactionOutcome::Committing,
                 crate::txn::owner::Outcome::Committed => TransactionOutcome::Committed,
                 crate::txn::owner::Outcome::Aborted => TransactionOutcome::Aborted,
+                crate::txn::owner::Outcome::Indeterminate => TransactionOutcome::Indeterminate,
             })
             .ok_or_else(|| TransactionError::not_found(format!("transaction '{handle}' not found")))
     }
 }
 
-/// A commit that lost a write conflict is a typed, retryable conflict.
+/// A commit that lost a write conflict is a typed, retryable conflict; a
+/// failure while the engine made it durable stays typed, so it reports that
+/// the commit may have landed.
 fn commit_error(handle: &str, error: crate::error::Error) -> TransactionError {
     let message = format!("commit error for transaction '{handle}': {error}");
     if error.is_txn_conflict() {
@@ -836,6 +848,9 @@ fn commit_error(handle: &str, error: crate::error::Error) -> TransactionError {
                 TransactionError::Storage(storage::Error::Io(
                     cause.with_context(format!("commit error for transaction '{handle}'")),
                 ))
+            }
+            indeterminate @ TransactionError::Storage(storage::Error::CommitIndeterminate(_)) => {
+                indeterminate
             }
             _ => TransactionError::execution(message),
         }

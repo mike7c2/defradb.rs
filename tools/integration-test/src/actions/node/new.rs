@@ -78,6 +78,11 @@ pub struct NewNode {
     /// authenticates as a node.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub without_node_identity: bool,
+    /// A Rust node on a directory of its own whose store opens its files
+    /// through a fault env, so `ArmCommitFault` can make its next commits
+    /// fail. A restart starts it again with the fault disarmed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub commit_fault: bool,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub expected_data: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,6 +116,7 @@ impl Op for NewNode {
         probe.iroh = false;
         probe.registered_identity = false;
         probe.without_node_identity = false;
+        probe.commit_fault = false;
         probe.node_identity_seed = None;
         probe.enable_signing = false;
         probe.key_type = None;
@@ -140,11 +146,12 @@ impl Op for NewNode {
         let txn_ttl = self.txn_ttl(state.client_type())?;
         let index_gate = self.index_gate(state.client_type())?;
         let registered_identity = self.registered_identity(state.client_type())?;
-        let dir = match self.database_dir {
-            Some(_) => Some(Arc::new(tempfile::tempdir().map_err(|e| {
+        let fault = self.commit_fault(state.client_type())?;
+        let dir = match (&self.database_dir, &fault) {
+            (None, None) => None,
+            _ => Some(Arc::new(tempfile::tempdir().map_err(|e| {
                 Failure::operation(format!("could not make the node's directory: {e}"))
             })?)),
-            None => None,
         };
         let spec = NodeSpec {
             network: self.network,
@@ -159,6 +166,7 @@ impl Op for NewNode {
             txn_ttl,
             se_key: self.searchable_encryption_key()?,
             index_gate,
+            fault,
             ..Default::default()
         };
         state.start_node(self.common.node(), spec);
@@ -167,6 +175,24 @@ impl Op for NewNode {
 }
 
 impl NewNode {
+    /// The fault env `commitFault` asks for. It is an env in the node's
+    /// process, so a Go node cannot take one.
+    fn commit_fault(
+        &self,
+        client: ClientType,
+    ) -> Result<Option<Arc<storage::testing::FaultEnv>>, Failure> {
+        if !self.commit_fault {
+            return Ok(None);
+        }
+        if client == ClientType::GoHttp {
+            return Err(Failure::unsupported(format!(
+                "{} argument commitFault under {client:?}: the fault is an env in the node's process",
+                Self::name()
+            )));
+        }
+        Ok(Some(Arc::default()))
+    }
+
     /// A key of the node's own when the scenario turns searchable encryption
     /// on, as Go's harness generates one per node.
     fn searchable_encryption_key(&self) -> Result<Option<[u8; 32]>, Failure> {

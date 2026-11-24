@@ -189,11 +189,13 @@ impl HttpClient {
                     errors: response
                         .errors
                         .into_iter()
-                        .map(|error| match error.extensions {
-                            Some(extensions) => {
-                                QueryResponseError::new(error.message).with_code(extensions.code)
+                        .map(|error| {
+                            match error.extensions.and_then(|extensions| extensions.code) {
+                                Some(code) => {
+                                    QueryResponseError::new(error.message).with_code(code)
+                                }
+                                None => QueryResponseError::new(error.message),
                             }
-                            None => QueryResponseError::new(error.message),
                         })
                         .collect(),
                     extensions: None,

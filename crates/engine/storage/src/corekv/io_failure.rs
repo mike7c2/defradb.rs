@@ -8,9 +8,23 @@ pub struct IoFailure {
     kind: io::ErrorKind,
     raw_os_error: Option<i32>,
     message: String,
+    /// Raised by the engine while it made a commit durable, so the commit
+    /// may have landed (`defra.txn.commit_outcome.indeterminate`).
+    at_commit: bool,
 }
 
 impl IoFailure {
+    /// Whether the engine raised this while it made a commit durable.
+    pub fn is_at_commit(&self) -> bool {
+        self.at_commit
+    }
+
+    /// This failure, raised while the engine made a commit durable.
+    pub fn at_commit(mut self) -> Self {
+        self.at_commit = true;
+        self
+    }
+
     pub fn kind(&self) -> io::ErrorKind {
         self.kind
     }
@@ -31,6 +45,7 @@ impl From<io::Error> for IoFailure {
             kind: error.kind(),
             raw_os_error: error.raw_os_error(),
             message: error.to_string(),
+            at_commit: false,
         }
     }
 }

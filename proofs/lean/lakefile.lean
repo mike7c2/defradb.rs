@@ -184,6 +184,9 @@ lean_lib ServiceRecord where
 lean_lib StorageFailure where
 
 @[default_target]
+lean_lib CommitOutcome where
+
+@[default_target]
 lean_lib WalkCutoff where
 
 @[default_target]

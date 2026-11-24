@@ -185,6 +185,27 @@ impl HttpClient {
         error.is_connect() || error.is_timeout()
     }
 
+    /// Whether a request that answered `status` may be sent again. A read
+    /// may, on any transient status. A write only on a status that refused it
+    /// before it ran (408, 429, 503): after a 500, 502 or 504 it may have
+    /// committed, and a resend could apply it twice or hide its outcome
+    /// (`defra.txn.commit_outcome.no_resend`).
+    pub fn may_resend(method: &str, status: StatusCode) -> bool {
+        match method {
+            "GET" => Self::is_retryable_status(status),
+            _ => matches!(status.as_u16(), 408 | 429 | 503),
+        }
+    }
+
+    /// Whether a request that failed with `error` may be sent again: a read
+    /// on a connect error or a timeout, a write only when it never connected.
+    fn may_resend_after(method: &str, error: &net::http::Error) -> bool {
+        match method {
+            "GET" => Self::is_retryable_error(error),
+            _ => error.is_connect(),
+        }
+    }
+
     /// Execute a request with retry logic for transient failures
     async fn send_with_retry(
         &self,
@@ -259,13 +280,13 @@ impl HttpClient {
                     // Don't retry successful responses or client errors (4xx except specific ones)
                     if response.status().is_success()
                         || (response.status().is_client_error()
-                            && !Self::is_retryable_status(response.status()))
+                            && !Self::may_resend(method, response.status()))
                     {
                         return Ok(response);
                     }
 
                     // Check if this status is retryable
-                    if Self::is_retryable_status(response.status()) && attempt < MAX_RETRIES {
+                    if Self::may_resend(method, response.status()) && attempt < MAX_RETRIES {
                         if self.verbose {
                             eprintln!("Retryable status code: {}", response.status());
                         }
@@ -281,7 +302,7 @@ impl HttpClient {
                     }
 
                     // Only retry on transient errors
-                    if Self::is_retryable_error(&e) && attempt < MAX_RETRIES {
+                    if Self::may_resend_after(method, &e) && attempt < MAX_RETRIES {
                         if self.verbose {
                             eprintln!("Retryable error, will retry...");
                         }
@@ -313,7 +334,7 @@ impl HttpClient {
             .await
             .unwrap_or_else(|e| format!("[failed to read body: {}]", e));
         match serde_json::from_str::<types::ErrorResponse>(&body) {
-            Ok(parsed) => Error::Server(parsed.error),
+            Ok(parsed) => parsed.into_error(),
             Err(_) => Error::Server(format!("HTTP {}: {}", status, body.trim())),
         }
     }
@@ -354,7 +375,7 @@ impl HttpClient {
                 .await
                 .unwrap_or_else(|e| format!("[failed to read body: {}]", e));
             if let Ok(err) = serde_json::from_str::<types::ErrorResponse>(&body_text) {
-                return Err(Error::Server(err.error));
+                return Err(err.into_error());
             }
             return Err(Error::Server(format!(
                 "HTTP {}: {}",

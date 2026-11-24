@@ -14,7 +14,7 @@ pub type Result<T> = std::result::Result<T, QueryError>;
 pub enum TransactionError {
     /// The transaction was not found (may have been committed/rolled back).
     #[error("transaction not found")]
-    NotFound(String),
+    NotFound(Missing),
 
     /// The transaction was already finalized (double commit/discard).
     #[error("transaction already finalized: {0}")]
@@ -54,7 +54,10 @@ pub enum TransactionError {
 impl TransactionError {
     /// Create a not found error.
     pub fn not_found(msg: impl Into<String>) -> Self {
-        Self::NotFound(msg.into())
+        Self::NotFound(Missing {
+            message: msg.into(),
+            outcome: None,
+        })
     }
 
     /// Create an already finalized error.
@@ -121,6 +124,39 @@ impl TransactionError {
             Self::NeedsInput(_) => false,
         }
     }
+
+    /// Whether the commit this error ended landed, when it says
+    /// (`defra.txn.commit_outcome`): not, for a lost conflict; unknown, for a
+    /// failure while the engine made it durable; what the registry retained,
+    /// for a transaction it no longer holds.
+    pub fn commit_outcome(&self) -> Option<defra_core::CommitOutcome> {
+        match self {
+            Self::NotFound(missing) => missing.outcome,
+            Self::Conflict(_) => Some(defra_core::CommitOutcome::NotCommitted),
+            Self::Storage(source) => source.commit_outcome(),
+            _ => None,
+        }
+    }
+
+    /// A missing transaction's error, carrying what a commit of it did.
+    pub fn with_commit_outcome(self, outcome: defra_core::CommitOutcome) -> Self {
+        match self {
+            Self::NotFound(missing) => Self::NotFound(Missing {
+                outcome: Some(outcome),
+                ..missing
+            }),
+            other => other,
+        }
+    }
+}
+
+/// A transaction the registry does not hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Missing {
+    /// Which transaction, for logs; the client sees `transaction not found`.
+    pub message: String,
+    /// For a commit: what the registry retained about the transaction.
+    pub outcome: Option<defra_core::CommitOutcome>,
 }
 
 /// Query error types
@@ -286,6 +322,19 @@ pub enum QueryError {
 }
 
 impl QueryError {
+    /// Whether the write this error ended committed, when it says
+    /// (`defra.txn.commit_outcome`): not, for a lost conflict; unknown, for a
+    /// failure while the engine made the commit durable.
+    pub fn commit_outcome(&self) -> Option<defra_core::CommitOutcome> {
+        match self {
+            Self::Storage(source) => source.commit_outcome(),
+            Self::TransactionConflict(_) | Self::TransactionRetryExhausted(_) => {
+                Some(defra_core::CommitOutcome::NotCommitted)
+            }
+            _ => None,
+        }
+    }
+
     /// Retain verification diagnostics without exposing them through a query response.
     pub fn commit_access_check_failed(error: Self) -> Self {
         Self::CommitAccessCheckFailed(Box::new(error))

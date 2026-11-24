@@ -30,6 +30,7 @@ section is the **diff**: what is proven vs. the accepted gap.
 | HTTP client-signed conditional update | Lean | http, query |
 | SSE loss and error delivery | TLA+ / Lean | events, http, query |
 | Storage failure classification | TLA+ / Lean | storage, db, query, http |
+| Commit outcome classification | TLA+ / Lean | defra-core, storage, db, query, http, cli |
 | B3 filtered replication | TLA+ | p2p, db-merge |
 | Explicit transactions in the request context | TLA+ / Lean | client, db, query, http, ffi, wasm, defra-node |
 | Transactional document relationships | TLA+ / Lean | acp, query, http, defra-node |

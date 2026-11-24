@@ -136,3 +136,26 @@ fn test_retry_constants() {
     assert!(cli::commands::client::http_client::RETRYABLE_STATUS_CODES.contains(&429));
     assert!(cli::commands::client::http_client::RETRYABLE_STATUS_CODES.contains(&500));
 }
+
+/// A write is sent again only on a status that refused it before it ran: a
+/// 500, 502 or 504 may follow a commit (`defra.txn.commit_outcome.no_resend`).
+#[test]
+fn a_write_is_not_resent_after_a_status_that_may_follow_its_commit() {
+    for status in [
+        StatusCode::INTERNAL_SERVER_ERROR,
+        StatusCode::BAD_GATEWAY,
+        StatusCode::GATEWAY_TIMEOUT,
+    ] {
+        assert!(HttpClient::may_resend("GET", status), "{status}");
+        for method in ["POST", "PATCH", "DELETE"] {
+            assert!(!HttpClient::may_resend(method, status), "{method} {status}");
+        }
+    }
+    for status in [
+        StatusCode::REQUEST_TIMEOUT,
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::SERVICE_UNAVAILABLE,
+    ] {
+        assert!(HttpClient::may_resend("POST", status), "{status}");
+    }
+}
