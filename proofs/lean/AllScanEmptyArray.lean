@@ -25,10 +25,15 @@ What must never happen:
 - a scan other than `_all` hands back an empty array (`value_scan_skips_empty`),
   or `_any` misses one of its matches (`any_scan_complete`);
 - a null array matches `_all` (`nil_not_all`);
-- two empty arrays clash in a unique index (`empty_arrays_never_clash`).
+- two empty arrays clash in a unique index (`empty_arrays_never_clash`);
+- with `_all` on two paths of one JSON index, the scan reads one path and the
+  marker lookup another, so a match whose scanned array is `[]` is lost
+  (`same_path_scan_complete`).
 
 The RED side: with the old writer, which stored `[]` as null, the same scan
-misses an empty array that matches (`neg_null_writer_misses_empty`).
+misses an empty array that matches (`neg_null_writer_misses_empty`). A scan
+that reads one path but looks the marker up at another misses
+`{"a": [1], "b": []}` (`neg_split_paths_miss_empty`).
 
 Rust anchors:
 - the writer: `IndexManager::expand_value_for_indexing`
@@ -227,6 +232,50 @@ theorem neg_null_writer_misses_empty :
   -- both sides are literal; Lean computes them
   decide
 
+-- A document with arrays at two paths of one JSON field, `a` and `b`.
+structure TwoPaths (V : Type) where
+  -- the array at path `a`
+  a : Arr V
+  -- the array at path `b`
+  b : Arr V
+
+-- `{a: {_all: p}, b: {_all: q}}`: both arrays pass their `_all`.
+def bothAll {V : Type} (p q : V → Bool) (d : TwoPaths V) : Bool :=
+  -- each path checked on its own
+  allMatch p d.a && allMatch q d.b
+
+-- The shipped scan: it reads path `a` and looks the marker up at `a` too.
+def samePathScan {V : Type} (p : V → Bool) (d : TwoPaths V) : Bool :=
+  -- the `_all` scan of one path, as `allScan` above
+  allScan p (entries d.a)
+
+-- The broken scan: it reads path `b` but looks the marker up at path `a`.
+def splitPathScan {V : Type} (q : V → Bool) (d : TwoPaths V) : Bool :=
+  -- elements of `b` that pass `b`'s condition, or the marker of `a`
+  valueScan q (entries d.b) || (entries d.a).any isEmpty
+
+/-- When the scan and the marker lookup share a path, every document matching
+    `_all` on both paths is found; the filter checks the other path. -/
+theorem same_path_scan_complete {V : Type} (p q : V → Bool) (d : TwoPaths V)
+    -- the document matches both conditions
+    (h : bothAll p q d = true) :
+    -- the scan finds it
+    samePathScan p d = true := by
+  -- the condition on `a` holds on its own
+  simp only [bothAll, Bool.and_eq_true] at h
+  -- and one path is the single-path case
+  exact all_scan_complete p d.a h.1
+
+/-- RED: scanning `b` while looking the marker up at `a` misses
+    `{"a": [1], "b": []}`, which matches `_all (≠ 25)` on both paths. -/
+theorem neg_split_paths_miss_empty :
+    -- the document matches
+    bothAll (fun n : Nat => n != 25) (fun n : Nat => n != 25) ⟨some [1], some []⟩ = true
+    -- but the split scan does not find it
+    ∧ splitPathScan (fun n : Nat => n != 25) ⟨some [1], some []⟩ = false := by
+  -- both sides are literal; Lean computes them
+  decide
+
 end AllScanEmptyArray
 
 #print axioms AllScanEmptyArray.all_scan_complete
@@ -237,3 +286,5 @@ end AllScanEmptyArray
 #print axioms AllScanEmptyArray.empty_all
 #print axioms AllScanEmptyArray.empty_arrays_never_clash
 #print axioms AllScanEmptyArray.neg_null_writer_misses_empty
+#print axioms AllScanEmptyArray.same_path_scan_complete
+#print axioms AllScanEmptyArray.neg_split_paths_miss_empty
