@@ -185,6 +185,11 @@ pub enum QueryError {
     #[error("{0}")]
     TransactionConflict(String),
 
+    /// A write a unique index refused: another document holds the value.
+    /// The message is the index's, unchanged.
+    #[error("{0}")]
+    UniqueViolation(String),
+
     /// Engine-owned retries reached their limit; this request is final.
     #[error("{0}")]
     TransactionRetryExhausted(String),

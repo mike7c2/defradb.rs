@@ -1315,7 +1315,7 @@ pub const PROPERTIES: &[Property] = &[
         name: "dense positions / commit order / at-most-once / snapshot prefix",
         axis: Tla,
         anchor: "crates/database/db/src/event/arrivals.rs record; crates/engine/storage/src/backends/regolith/transaction.rs append; crates/database/db/tests/read/arrival_transactions.rs",
-        model_ref: "regolith@e844baefe838f3af76403afd46c4b42f1a0b98a5 proofs/tla/CommitOrderedAppend.tla (GREEN Groups/Pipeline/Faults, RED Counter/OnceFromView/AssignBeforeValidation)",
+        model_ref: "regolith@055589006356738a31ee3b0e965d8e2a9c5bc057 proofs/tla/CommitOrderedAppend.tla (GREEN Groups/Pipeline/Faults, RED Counter/OnceFromView/AssignBeforeValidation)",
         tiers: &[Behavioral],
         bound_by: "crates/database/db/tests/read/arrival_transactions.rs reversed_concurrent_commits_receive_cursors_in_commit_order, rollback_is_atomic_and_duplicate_arrivals_do_not_advance, cursor_survives_database_reopen",
     },
@@ -2377,7 +2377,7 @@ pub const PROPERTIES: &[Property] = &[
         name: "Validated point reads reject crossing writes",
         axis: Tla,
         anchor: "crates/engine/storage/src/backends/regolith/transaction.rs; proofs/tests/behavioral/ssi.rs",
-        model_ref: "regolith@e844baefe838f3af76403afd46c4b42f1a0b98a5 proofs/tla/DefraLevel.tla",
+        model_ref: "regolith@055589006356738a31ee3b0e965d8e2a9c5bc057 proofs/tla/RepeatableRead.tla (MC_DefraLevel_* configurations; regolith has no DefraLevel.tla)",
         tiers: &[Behavioral, Boundary],
         bound_by: "proofs/tests/behavioral/ssi.rs ssi_write_skew_prevented",
     },
@@ -3552,6 +3552,39 @@ pub const PROPERTIES: &[Property] = &[
         axis: Tla,
         anchor: "crates/database/db/src/collection/ops/add/mod.rs DB::add_collection, prepare_new_collections, check_policies, check_collection_patch; crates/database/db/src/txn/registry/schemas.rs add_collection_in_txn_as; crates/database/db/src/txn/registry/views.rs DbTransactionRegistry::add_view_in_txn; crates/database/db/src/collection/ops/create.rs DB::create_collections_atomic, DB::stage_new_collections",
         model_ref: "MC_AddCollection_{Green,Red_*}.cfg",
+        tiers: &[Boundary],
+        bound_by: "",
+    },
+    Property {
+        // #3265: what a unique index guarantees to writers racing on one
+        // node. The race is driven through the node's clients by testo and
+        // on the worker pool by the db race tests; regolith's validation of
+        // the entry read (v0.2.5, RepeatableRead.tla MC_DefraLevel_* configs,
+        // and commit_nowait validating as commit, src/transaction/nowait.rs:1-6)
+        // is assumed, not modeled.
+        family: "Client transaction isolation",
+        name: "INV_AtMostOnePerNonNilValue / INV_LoserLeavesNothing / INV_LoserRefusedTyped / INV_NoIndexNotRefused / INV_NilNotRefused",
+        axis: Tla,
+        anchor: "crates/engine/storage/src/index/unique.rs UniqueIndex::save, UniqueIndex::has_nil_field; crates/database/db/src/error/mod.rs index_write_query_error; crates/database/db/src/write/autocommit/helpers.rs; crates/engine/query/src/executor.rs TXN_CONFLICT_MESSAGE, QueryResponseError::from_query_error",
+        model_ref: "MC_ClientUniqueAdmission_{Green_*,Red_*}.cfg",
+        tiers: &[Behavioral],
+        bound_by: "tools/integration-test/tests/testo/txn/unique_isolation.rs the_second_commit_of_a_unique_value_is_a_conflict, the_losers_rerun_is_refused_with_the_unique_code, nil_values_are_not_refused, without_an_index_both_commit; tools/integration-test/tests/testo/index/unique_refusal_code.rs a_second_autocommit_create_of_a_value_carries_its_code; crates/database/db/tests/write/conflict_reasons.rs a_create_that_loses_a_unique_index_race_reports_the_violation, every_round_of_a_free_unique_race_has_one_winner_and_one_typed_refusal",
+    },
+    Property {
+        family: "Client transaction isolation",
+        name: "UniqueRefusal.code_injective / message_injective / autocommit_loser_is_unique / explicit_loser_is_conflict",
+        axis: Lean,
+        anchor: "crates/engine/query/src/executor.rs TXN_CONFLICT_MESSAGE, UNIQUE_CONSTRAINT_VIOLATION_ERROR_CODE, QueryResponseError::from_query_error; crates/engine/storage/src/corekv/errors.rs UNIQUE_CONSTRAINT_VIOLATION_MESSAGE",
+        model_ref: "UniqueRefusal (lake build)",
+        tiers: &[Contract],
+        bound_by: "proofs/tests/lean_conformance.rs lean_refusal_vocab_matches_rust",
+    },
+    Property {
+        family: "Client transaction isolation",
+        name: "regolith validates the unique entry read at commit, under commit and commit_nowait alike",
+        axis: Tla,
+        anchor: "crates/engine/storage/src/index/unique.rs UniqueIndex::save txn.has; crates/engine/storage/src/backends/regolith/transaction.rs RegolithTxn::commit",
+        model_ref: "regolith@055589006356738a31ee3b0e965d8e2a9c5bc057 proofs/tla/RepeatableRead.tla (MC_DefraLevel_* configurations); src/transaction/nowait.rs:1-6",
         tiers: &[Boundary],
         bound_by: "",
     },

@@ -67,6 +67,7 @@ mod query_with_unique_index_only_filter;
 mod range_filter;
 mod resume_after_open;
 mod status;
+mod unique_refusal_code;
 mod unique_writer;
 mod update_unique;
 mod update_unique_composite;

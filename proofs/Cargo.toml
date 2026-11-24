@@ -27,6 +27,9 @@ thiserror.workspace = true
 [dev-dependencies]
 # The estimator constants `tests/lean_conformance.rs` binds to the Lean contract.
 p2p = { path = "../crates/database/p2p" }
+# The refusal messages and codes `lean_refusal_vocab_matches_rust` binds to UniqueRefusal.lean.
+query = { path = "../crates/engine/query" }
+storage = { path = "../crates/engine/storage" }
 defra-harness = { git = "https://github.com/sourcenetwork/backbone.git", rev = "7993ba38d889d16503f7a6ec9c33ef91375e4c0e" }
 edge = { path = "../crates/foundation/edge" }
 nuclei.workspace = true

@@ -23,6 +23,31 @@ fn graphql_errors(value: &Value) -> Vec<&str> {
         .collect()
 }
 
+/// Whether a GraphQL error whose message contains `wanted` carries
+/// `extensions.code` `code`. A failure that is not a GraphQL response
+/// carries no code.
+fn carries_code<A>(outcome: &Result<Value, Failure>, wanted: &str, code: &str) -> bool
+where
+    A: Op,
+{
+    let Ok(value) = outcome else {
+        return false;
+    };
+    A::GRAPHQL
+        && value
+            .get("errors")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|error| {
+                error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message| message.contains(wanted))
+            })
+            .any(|error| error.pointer("/extensions/code").and_then(Value::as_str) == Some(code))
+}
+
 fn with_retry<F>(call: F) -> Result<Value, Failure>
 where
     F: Fn() -> Result<Value, Failure>,
@@ -161,6 +186,20 @@ where
             Err(failure) => json!({"result": null, "error": failure.message}),
         };
         return match_envelope(state, common, &envelope, expected.as_ref());
+    }
+    if let Some(code) = action.expected_error_code() {
+        let Some(wanted) = action.expected_error() else {
+            return Err(format!(
+                "expected error code {code:?} names no expected error"
+            ));
+        };
+        return match carries_code::<A>(&outcome, wanted, code) {
+            true => Ok(()),
+            false => Err(format!(
+                "expected error containing {wanted:?} with code {code:?}; got {}",
+                describe(&outcome)
+            )),
+        };
     }
     if let Some(wanted) = action.expected_error() {
         let matched = match &outcome {
