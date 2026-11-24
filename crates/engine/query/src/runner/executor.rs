@@ -792,6 +792,10 @@ impl<F: DocFetcher + 'static, R: TransactionRegistry> QueryRunner<F, R> {
                 // A subscription without SSE is the caller's mistake, answered with 406.
                 if matches!(e, crate::error::QueryError::SubscriptionNeedsSse) {
                     tracing::debug!(query = %request.query, "subscription sent without SSE");
+                } else if let crate::error::QueryError::NeedsInput(input) = &e {
+                    // Not a failure: the caller resolves the input and runs
+                    // the request again.
+                    tracing::debug!(kind = ?input.kind(), "query needs an external input");
                 } else {
                     tracing::error!(
                         query = %request.query,
