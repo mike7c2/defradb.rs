@@ -155,3 +155,63 @@ fn a_range_and_like_on_one_path() {
         &["Both"],
     );
 }
+
+#[test]
+#[mantra_macros::req_test("defra.index.json_range_paths")]
+fn nin_and_like_with_a_missing_nin_path() {
+    run(
+        &[
+            json!({ "name": "NoA", "custom": { "b": "xa" } }),
+            json!({ "name": "NullA", "custom": { "a": null, "b": "xa" } }),
+            json!({ "name": "Five", "custom": { "a": 5, "b": "xa" } }),
+            json!({ "name": "Equal", "custom": { "a": 25, "b": "xa" } }),
+            json!({ "name": "Unlike", "custom": { "a": 5, "b": "ya" } }),
+        ],
+        "{custom: {a: {_nin: [25]}, b: {_like: \"x%\"}}}",
+        &["Five", "NoA", "NullA"],
+    );
+}
+
+#[test]
+#[mantra_macros::req_test("defra.index.json_range_paths")]
+fn ne_and_like_with_a_missing_ne_path() {
+    run(
+        &[
+            json!({ "name": "NoA", "custom": { "b": "xa" } }),
+            json!({ "name": "NullA", "custom": { "a": null, "b": "xa" } }),
+            json!({ "name": "Five", "custom": { "a": 5, "b": "xa" } }),
+            json!({ "name": "Equal", "custom": { "a": 25, "b": "xa" } }),
+            json!({ "name": "Unlike", "custom": { "a": 5, "b": "ya" } }),
+        ],
+        "{custom: {a: {_ne: 25}, b: {_like: \"x%\"}}}",
+        &["Five", "NullA"],
+    );
+}
+
+#[test]
+#[mantra_macros::req_test("defra.index.json_range_paths")]
+fn ranges_from_two_any_clauses_on_one_path() {
+    run(
+        &[
+            json!({ "name": "Split", "custom": { "a": [5, 30] } }),
+            json!({ "name": "In", "custom": { "a": [15] } }),
+            json!({ "name": "Out", "custom": { "a": [5] } }),
+        ],
+        "{_and: [{custom: {a: {_any: {_gt: 10}}}}, {custom: {a: {_any: {_lt: 20}}}}]}",
+        &["In", "Split"],
+    );
+}
+
+#[test]
+#[mantra_macros::req_test("defra.index.json_range_paths")]
+fn two_bounds_in_one_any_clause() {
+    run(
+        &[
+            json!({ "name": "Split", "custom": { "a": [5, 30] } }),
+            json!({ "name": "In", "custom": { "a": [15] } }),
+            json!({ "name": "Out", "custom": { "a": [5] } }),
+        ],
+        "{custom: {a: {_any: {_gt: 10, _lt: 20}}}}",
+        &["In"],
+    );
+}
