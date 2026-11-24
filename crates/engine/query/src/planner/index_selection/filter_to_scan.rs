@@ -152,6 +152,7 @@ pub fn filter_to_index_scan(
     let mut in_json_path: Option<JsonPath> = None;
     let mut has_scan_all = false;
     let mut scan_value_filter: Option<ScanValueFilter> = None;
+    let mut value_filter_path: Option<JsonPath> = None;
     let mut lower_bound = Bound::Unbounded;
     let mut upper_bound = Bound::Unbounded;
     let mut range_json_path: Option<JsonPath> = None;
@@ -255,6 +256,7 @@ pub fn filter_to_index_scan(
                         FilterOp::Nilike => ScanValueFilter::Nilike(pattern.clone()),
                         _ => unreachable!(),
                     });
+                    value_filter_path = cond.json_path.clone();
                 }
                 if cond.json_path.is_some() || scan_all_all.is_some() {
                     scan_json_path = cond.json_path.clone();
@@ -502,6 +504,21 @@ pub fn filter_to_index_scan(
     } else {
         return None;
     };
+
+    // The executor tests the pattern on the scanned value, so a pattern from
+    // another path would drop matches; the filter checks it instead.
+    let scan_path = if has_eq {
+        &eq_json_path
+    } else if has_in {
+        &in_json_path
+    } else if ranged {
+        &range_json_path
+    } else {
+        &value_filter_path
+    };
+    if *scan_path != value_filter_path {
+        scan_value_filter = None;
+    }
 
     let all = if has_eq {
         eq_all
