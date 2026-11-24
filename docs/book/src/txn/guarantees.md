@@ -9,7 +9,11 @@ validation and is not tested here.
 ## Per operation and commit mode
 
 Two writers each add (or update to) the same non-nil value of a field with
-`@index(unique: true)`. Exactly one commits. What the other is told:
+`@index(unique: true)`, a value no committed document holds yet. Exactly one
+commits. (When another document already holds it, both are refused and neither
+commits.) An autocommit loser is told of the unique violation when its retry
+budget allows at least one re-run (`with_max_txn_retries`, 5 by default); with
+none, it gets the retry-exhausted error. What the other is told:
 
 | Writer's commit mode | The loser is told | Source |
 |---|---|---|
@@ -64,8 +68,10 @@ modeled by `proofs/tla/ClientUniqueAdmission.tla`; the words and codes by
 | Unique violation | a GraphQL mutation | the index's text, naming the writer's DocID and value | `UNIQUE_CONSTRAINT_VIOLATION` |
 | Unique violation | REST | the same text | HTTP `409`, `"code": "UNIQUE_CONSTRAINT_VIOLATION"` |
 
-The code is additive: the message is unchanged, a client that matched the text still
-matches, and Go and the CLI, which report no code, behave as before. Changing either the
+The code is additive: the message is unchanged, and Go reports no code. The CLI prints
+no code either, but a unique refusal it gets over HTTP now prints the message alone,
+without the `server returned error: ` prefix it carried before: a script that matched
+that prefix must match the message instead. Changing either the
 message or the code is a breaking change for clients and goes through a requirement
 (`reqs/defra/txn-isolation.md`) first.
 

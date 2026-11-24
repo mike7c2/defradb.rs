@@ -9,7 +9,10 @@ is told, which depends only on how it committed:
   told `transaction conflict. Please retry`, with no error code;
 - an autocommit write the node runs is run again by the node, finds the
   winner's entry, and is refused as a unique violation, whose GraphQL error
-  carries the code `UNIQUE_CONSTRAINT_VIOLATION`.
+  carries the code `UNIQUE_CONSTRAINT_VIOLATION`. That needs a retry budget of
+  at least one re-run (`DbOptions::with_max_txn_retries`, 5 by default); with
+  none, the lost first commit ends in `TransactionRetryExhausted` instead,
+  which this file does not cover.
 
 What must never happen: an autocommit write answered with a conflict, an
 explicit commit answered with a unique code, or two refusals with the same
@@ -83,12 +86,22 @@ end CommitMode
 
 open RefusalKind
 
--- What the losing client of each mode is told.
+-- What the losing client of each mode is told, given a retry budget of at
+-- least one re-run (see `autocommitLoser`).
 def loserKind : CommitMode → RefusalKind
   -- Its own commit lost, so it hears of the conflict.
   | .explicitTxn => .txnConflict
   -- The node ran it again, and the re-run met the winner's entry.
   | .autocommit  => .uniqueViolation
+
+-- What an autocommit loser is told with `reruns` re-runs allowed: none when
+-- the budget allows no re-run, since the lost commit then ends in
+-- `TransactionRetryExhausted` before it can meet the winner's entry.
+def autocommitLoser (reruns : Nat) : Option RefusalKind :=
+  -- No re-run: the budget is spent at the lost commit.
+  if reruns = 0 then none
+  -- A re-run meets the winner's entry.
+  else some (loserKind .autocommit)
 
 -- Every kind, for the contract.
 def kinds : List RefusalKind := [.txnConflict, .uniqueViolation]
@@ -96,8 +109,17 @@ def kinds : List RefusalKind := [.txnConflict, .uniqueViolation]
 -- Every mode, for the contract.
 def modes : List CommitMode := [.explicitTxn, .autocommit]
 
-/-- An autocommit loser is never told of a conflict. -/
-theorem autocommit_loser_is_unique : loserKind .autocommit = .uniqueViolation := rfl
+/-- With at least one re-run allowed, an autocommit loser is told of the unique
+    violation, never of a conflict. -/
+theorem autocommit_loser_is_unique (reruns : Nat) (h : 0 < reruns) :
+    autocommitLoser reruns = some .uniqueViolation := by
+  -- A positive budget is not zero, so the re-run branch is taken.
+  have hz : reruns ≠ 0 := by omega
+  -- Unfold the answer and the loser's kind.
+  simp [autocommitLoser, loserKind, hz]
+
+/-- With no re-run allowed, this file promises the autocommit loser nothing. -/
+theorem no_rerun_is_not_covered : autocommitLoser 0 = none := rfl
 
 /-- An explicit loser is told its commit conflicted. -/
 theorem explicit_loser_is_conflict : loserKind .explicitTxn = .txnConflict := rfl

@@ -181,6 +181,9 @@ where
             return Err(format!("unsupported op: {}", failure.message));
         }
     }
+    if common.envelope && action.expected_error_code().is_some() {
+        return Err("an expected error code cannot be checked through an envelope".to_owned());
+    }
     if common.envelope {
         let envelope = match outcome {
             Ok(value) => json!({"result": value, "error": ""}),
